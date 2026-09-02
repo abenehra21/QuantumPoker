@@ -5,7 +5,6 @@
 
 from numpy import inf
 from numpy.random import randint
-from tkinter import Tk, simpledialog
 # ----Get Inputs--------------------------------------------------------------------------------------------------------
 
 
@@ -15,9 +14,10 @@ def getIntInput(inputString, numMin, numMax):
         try:
             num = int(input(inputString))
         except ValueError:
-            print("Du må skrive inn et gyldig tall mellom {} og {}".format(numMin, numMax))
+            print("Please enter a valid whole number between {} and {}.".format(numMin, numMax))
+            continue
         if num<numMin or num>numMax:
-            print("Du må skrive inn et tall mellom {} og {}".format(numMin, numMax))
+            print("Please enter a number between {} and {}.".format(numMin, numMax))
     return num
 
 
@@ -27,9 +27,10 @@ def getFloatInput(inputString, numMin, numMax):
         try:
             num = float(input(inputString))
         except ValueError:
-            print("Du må skrive inn et gyldig tall mellom {} og {}".format(numMin, numMax))
+            print("Please enter a valid number between {} and {}.".format(numMin, numMax))
+            continue
         if num<numMin or num>numMax:
-            print("Du må skrive inn et tall mellom {} og {}".format(numMin, numMax))
+            print("Please enter a number between {} and {}.".format(numMin, numMax))
     return num
 
 

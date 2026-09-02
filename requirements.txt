@@ -1,0 +1,11 @@
+# Quantum Poker runtime dependencies.
+# Verified against Python 3.13, Qiskit 2.5, NumPy 2.5 and Matplotlib 3.11.
+
+qiskit>=1.0
+numpy>=1.24
+matplotlib>=3.7
+
+# Needed only to play from a notebook. `%matplotlib notebook` was removed in
+# Jupyter Notebook 7, so the interactive backend now comes from ipympl.
+notebook>=7.0
+ipympl>=0.9

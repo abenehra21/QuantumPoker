@@ -5,23 +5,36 @@
 
 from os.path import dirname, abspath
 import sys
-sys.path.append(dirname(abspath(__file__)))
+
+# Make the game importable both as ``Python.<module>`` (from the repository
+# root) and as plain ``<module>`` (from inside the Python/ folder).
+_HERE = dirname(abspath(__file__))
+for _path in (_HERE, dirname(_HERE)):
+    if _path not in sys.path:
+        sys.path.append(_path)
 from Python.interactive import InteractiveContainer
 from Python.Board import Board
 from Python.Buttons import InteractiveButtons
 from Python.helpFiles import distributeGates
-from numpy import amax, array, sum, empty, append, argwhere, copy, any, in1d, argsort, zeros
-from qiskit import execute, Aer
+from numpy import amax, array, sum, empty, append, argwhere, copy, any, isin, argsort, zeros
+from numpy.random import seed as setRandomSeed
+from qiskit.quantum_info import Statevector
 from time import time
 
 
 class PokerGame:
     def __init__(self, deckOfGates, nPlayers, money, names = None, smallBlind=5, smallBlindPlayer=0,
                  enableEntanglement=False, seed=None):
-        if seed == None:
+        if seed is None:
             seed = int(time())
+        self.seed = seed
         self.boards = [Board(boardSeed=seed, enableEntanglement=enableEntanglement) for i in range(nPlayers)]
 
+        # Board() reseeds NumPy's global RNG, but how much of that stream Qiskit
+        # consumes while building the state vector is an implementation detail
+        # that changes between Qiskit releases. Reseed here so that a given
+        # `seed` always deals the same hands, whatever Qiskit version is used.
+        setRandomSeed(seed + 1)
         self.playerGates = distributeGates(deckOfGates, nPlayers)
         self.interactive = InteractiveContainer(nPlayers, self.boards[0].getSize(), deckOfGates,
                                                 [str(i) for i in range(nPlayers)] if (names is None) else names)
@@ -216,19 +229,18 @@ class PokerGame:
                     self.interactive.displayEndResults(scoresDisplay, winnings)
                     return
 
-        simulator = Aer.get_backend("qasm_simulator")
         scores = [0 for i in range(self.nPlayers)]
         for i in range(self.nPlayers):
             if i in self.foldedPlayers:
                 scores[i] = -1
                 continue
 
+            # Draw a single measurement outcome for this player's five qubits.
+            # Qiskit no longer ships execute()/Aer in its top-level namespace,
+            # so the shot is sampled directly from the final state vector.
             board = self.boards[i]
-            board.qc.measure(board.q, board.c)
-            counts = execute(board.qc, simulator, shots=1).result().get_counts(board.qc)
-            for bitStr in list(counts.keys())[0]:
-                if bitStr == "1":
-                    scores[i] += 1
+            outcome = Statevector.from_instruction(board.qc).sample_memory(1)[0]
+            scores[i] = outcome.count("1")
 
         print("\n---- Final scores----")
         winners = []
@@ -259,7 +271,7 @@ class PokerGame:
         winnings = [0 for i in range(self.nPlayers)]
         originalScore = copy(scores)
 
-        if self.allIn.shape[0] == 0 or not(any(in1d(array(winners), self.allIn))):
+        if self.allIn.shape[0] == 0 or not(any(isin(array(winners), self.allIn))):
             self.printWinners(winners, nWinners, scores, pot[0])
             for i in range(len(winners)):
                 winnings[winners[i]] += pot[0]/nWinners
@@ -276,7 +288,7 @@ class PokerGame:
                 scores[self.allIn[i]] = -1
                 winners = argwhere(scores == amax(scores)).flatten()
                 nWinners = winners.shape[0]
-                if not(any(in1d(array(winners), self.allIn))):
+                if not(any(isin(array(winners), self.allIn))):
                     pot[-1] = sum(pot[i+1:])
                     break
             if pot[-1] > 0:
