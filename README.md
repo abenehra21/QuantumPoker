@@ -1,4 +1,13 @@
 # Quantum Poker
+
+> ### 🎃 IBM Quantum Fall Fest 2026
+> This repository is a project made for **IBM Quantum Fall Fest 2026**.
+> It is a fork of the original [Quantum Poker](https://github.com/sintefmath/QuantumPoker)
+> by SINTEF, brought up to date so that it runs on current versions of Qiskit,
+> NumPy, Matplotlib and Jupyter. Full attribution to the original authors and to
+> the paper the game comes from is in
+> [Credits and original work](#credits-and-original-work) at the bottom of this file.
+
 This repository contains all the necessary components to learn and play quantum poker. The game works in the same way as Texas hold 'em poker with the main difference being that the community cards are replaced by qubits and the player cards are replaced by quantum logic gates. Don't fear if you don't understand the jargon, you can play the game anyway.
 This implementation is a proof-of-concept, but it is fully possible to create apps for mobile phones or tablets.
 We hope that you will enjoy the game and get curious to look "under the hood" and learn quantum computing!
@@ -19,9 +28,41 @@ After the first three cards have been revealed, a second round of betting takes 
 If a player has no money left on the table, he is out of the game, and the winner is the last person to have any money left.
 
 ## How to get started
-The game requires the Qiskit package for Python to be able to run. For help installing Qiskit please see [qiskit.org](https://qiskit.org/documentation/install.html). In the Jupyter Notebok file [runPokerJN.ipynb](Python/runPokerJN.ipynb) an example game along with instructions on how to play the game is included. To play the game, either open the file [runInteractivePokerJN.ipynb](Python/runInteractivePokerJN.ipynb) through Jupyter Notebook (in a Qiskit environment) or run the file [runPoker.py](Python/runPoker.py) locally. Running the game in Jupyter Notebook is notably slower than running the proper Python file.
+The game needs Python 3.9 or newer and Qiskit. Every dependency is listed in
+[requirements.txt](requirements.txt):
 
-You can also find more info here [https://arxiv.org/abs/1908.00044](https://arxiv.org/abs/1908.00044).
+```bash
+git clone https://github.com/abenehra21/QuantumPoker.git
+cd QuantumPoker
+python -m pip install -r requirements.txt
+```
+
+There are three ways to play or read about the game:
+
+* **Run it locally** (fastest, recommended):
+
+  ```bash
+  python Python/runPoker.py
+  ```
+
+  A Matplotlib window opens and the terminal asks for the number of players and their initials.
+
+* **Read the walkthrough.** The notebook [runPokerJN.ipynb](Python/runPokerJN.ipynb)
+  plays through one complete round with commentary, explaining the quantum
+  mechanics as it goes. It is the best place to start if you have never seen a
+  qubit before.
+
+* **Play in a notebook.** Open [runInteractivePokerJN.ipynb](Python/runInteractivePokerJN.ipynb)
+  in Jupyter and run every cell. The interactive board is drawn with
+  [ipympl](https://matplotlib.org/ipympl/), so make sure it is installed
+  (it is in `requirements.txt`). Running the game in a notebook is noticeably
+  slower than running `runPoker.py` directly. The notebook can also be opened
+  straight from
+  [Google Colab](https://colab.research.google.com/github/abenehra21/QuantumPoker/blob/master/Python/runInteractivePokerJN.ipynb),
+  where it installs its own dependencies.
+
+The game runs entirely on the local state-vector simulator built into Qiskit —
+no IBM Quantum account, API token or hardware access is needed.
 
 ## Detailed description the game
 Note that this section assumes rudementary knowledge of how to play the game. We advise trying a couple of rounds before reading this section.
@@ -92,3 +133,62 @@ CX|1+> = |1+> <br />
 CX|1-> = |1-> <br />
 
 A related game (by name) has been proposed here https://github.com/danielbultrini/Quantum-Hold-em-.
+
+## Credits and original work
+
+Quantum Poker was designed and written by **Franz G. Fuchs**, **Vemund Falch** and
+**Christian Johnsen** at [SINTEF](https://www.sintef.no/). All of the game design,
+the quantum mechanics behind it and the original implementation are theirs; this
+repository is a fork that updates their code for current library versions.
+
+**The paper.** The game is described in:
+
+> Franz G. Fuchs, Vemund Falch and Christian Johnsen,
+> *"Quantum Poker – a game for quantum computers suitable for benchmarking error
+> mitigation techniques on NISQ devices"*,
+> The European Physical Journal Plus **135**, 353 (2020).
+> [doi:10.1140/epjp/s13360-020-00360-5](https://doi.org/10.1140/epjp/s13360-020-00360-5)
+> · [arXiv:1908.00044](https://arxiv.org/abs/1908.00044)
+
+```bibtex
+@article{fuchs2020quantumpoker,
+  title   = {Quantum Poker -- a game for quantum computers suitable for
+             benchmarking error mitigation techniques on NISQ devices},
+  author  = {Fuchs, Franz G. and Falch, Vemund and Johnsen, Christian},
+  journal = {The European Physical Journal Plus},
+  volume  = {135},
+  number  = {4},
+  pages   = {353},
+  year    = {2020},
+  doi     = {10.1140/epjp/s13360-020-00360-5},
+  eprint  = {1908.00044},
+  archivePrefix = {arXiv},
+  primaryClass  = {quant-ph}
+}
+```
+
+**The original project.** [github.com/sintefmath/QuantumPoker](https://github.com/sintefmath/QuantumPoker),
+released under the GNU General Public License v3.0. This fork keeps the same
+license, and the per-file copyright headers naming the original authors are left
+intact.
+
+### What this fork changes
+
+Only the parts that had stopped working were touched — the rules, the board
+layout and the physics are unchanged:
+
+* Ported off the Qiskit APIs removed in Qiskit 1.0: `execute()`, `BasicAer` and
+  `Aer` are gone, so the state vector now comes from
+  `qiskit.quantum_info.Statevector` and the final measurement is sampled from it.
+  The game no longer needs `qiskit-aer` at all.
+* Replaced the removed `u3` gate with its modern equivalent, `u`.
+* Replaced `numpy.in1d`, removed in NumPy 2.0, with `numpy.isin`.
+* Fixed the `sys.path` setup so the modules import both from the repository root
+  and from inside `Python/`, and dropped an unused `tkinter` import (`tkinter`
+  is not always present in a Python build, and the game never used it).
+* Made the deal reproducible: the same `seed` now always deals the same hands,
+  independently of how much randomness Qiskit happens to consume internally.
+* Updated the notebooks for Jupyter Notebook 7 / JupyterLab, where
+  `%matplotlib notebook` no longer exists — the interactive board now uses
+  `ipympl`. The walkthrough notebook was re-run so its figures match its text.
+* Added [requirements.txt](requirements.txt).

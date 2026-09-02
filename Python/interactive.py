@@ -5,7 +5,13 @@
 
 from os.path import dirname, abspath
 import sys
-sys.path.append(dirname(abspath(__file__)))
+
+# Make the game importable both as ``Python.<module>`` (from the repository
+# root) and as plain ``<module>`` (from inside the Python/ folder).
+_HERE = dirname(abspath(__file__))
+for _path in (_HERE, dirname(_HERE)):
+    if _path not in sys.path:
+        sys.path.append(_path)
 import matplotlib.pyplot as plt
 from Python.helpFiles import getUnentangledTag
 from Python.CustomButton import Button
