@@ -1,12 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 300" width="960" height="300" role="img" aria-label="The five states a cursed coin can be in">
   <defs>
     <radialGradient id="gold" cx="34%" cy="28%">
-      <stop offset="0%" stop-color="#ffe9a8"/><stop offset="38%" stop-color="#ffc247"/>
-      <stop offset="72%" stop-color="#d5871a"/><stop offset="100%" stop-color="#8a4d09"/>
+      <stop offset="0%" stop-color="#ffe9a8"/><stop offset="38%" stop-color="#e8a33d"/>
+      <stop offset="72%" stop-color="#a66716"/><stop offset="100%" stop-color="#5e3607"/>
     </radialGradient>
     <radialGradient id="dark" cx="34%" cy="28%">
-      <stop offset="0%" stop-color="#5b4d72"/><stop offset="45%" stop-color="#3a3050"/>
-      <stop offset="100%" stop-color="#201a30"/>
+      <stop offset="0%" stop-color="#574a3c"/><stop offset="45%" stop-color="#352c23"/>
+      <stop offset="100%" stop-color="#1a140f"/>
     </radialGradient>
     <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0%" stop-color="#a4650f"/><stop offset="26%" stop-color="#ffe7a8"/>
@@ -24,66 +24,66 @@
       <circle cx="36" cy="45" r="9.5"/><circle cx="64" cy="45" r="9.5"/>
       <path d="M50 53 L43.5 65 L56.5 65 Z"/>
       <rect x="35" y="71" width="30" height="10" rx="2.5"/>
-      <rect x="44.5" y="71" width="2.6" height="10" fill="#3a3050"/>
-      <rect x="52.9" y="71" width="2.6" height="10" fill="#3a3050"/>
+      <rect x="44.5" y="71" width="2.6" height="10" fill="#352c23"/>
+      <rect x="52.9" y="71" width="2.6" height="10" fill="#352c23"/>
     </g>
   </defs>
 
-  <rect width="960" height="300" rx="22" fill="#140c20"/>
-  <rect x="1" y="1" width="958" height="298" rx="21" fill="none" stroke="#402c60"/>
+  <rect width="960" height="300" rx="22" fill="#16271f"/>
+  <rect x="1" y="1" width="958" height="298" rx="21" fill="none" stroke="#0d1813"/>
 
   <!-- face up -->
   <g transform="translate(60,58)" filter="url(#glow)">
     <circle cx="50" cy="50" r="50" fill="url(#gold)"/>
     <circle cx="50" cy="50" r="47" fill="none" stroke="#ffecb4" stroke-opacity=".55" stroke-width="3"/>
-    <g fill="#5a2c02"><use href="#face"/></g>
+    <g fill="#2a1c10"><use href="#face"/></g>
   </g>
-  <text x="110" y="192" text-anchor="middle" fill="#ffd166" font-family="Georgia,serif" font-size="19" font-weight="700">Face-up</text>
-  <text x="110" y="218" text-anchor="middle" fill="#a494c0" font-family="Inter,sans-serif" font-size="14">A sure point</text>
-  <text x="110" y="248" text-anchor="middle" fill="#9b5de5" font-family="Inter,sans-serif" font-size="15">|1⟩</text>
+  <text x="110" y="192" text-anchor="middle" fill="#e8a33d" font-family="IM Fell English SC,Georgia,serif" font-size="19" font-weight="700">Face-up</text>
+  <text x="110" y="218" text-anchor="middle" fill="#b3a68b" font-family="Barlow Condensed,Helvetica,sans-serif" font-size="14">A sure point</text>
+  <text x="110" y="248" text-anchor="middle" fill="#9d6fa8" font-family="Barlow Condensed,Helvetica,sans-serif" font-size="15">|1⟩</text>
 
   <!-- skull -->
   <g transform="translate(240,58)">
     <circle cx="50" cy="50" r="50" fill="url(#dark)"/>
     <circle cx="50" cy="50" r="47" fill="none" stroke="#9682be" stroke-opacity=".3" stroke-width="3"/>
-    <g fill="#b6a8d4" opacity=".75"><use href="#skull"/></g>
+    <g fill="#a2937c" opacity=".75"><use href="#skull"/></g>
   </g>
-  <text x="290" y="192" text-anchor="middle" fill="#ffd166" font-family="Georgia,serif" font-size="19" font-weight="700">Skull</text>
-  <text x="290" y="218" text-anchor="middle" fill="#a494c0" font-family="Inter,sans-serif" font-size="14">Dead — flip it</text>
-  <text x="290" y="248" text-anchor="middle" fill="#9b5de5" font-family="Inter,sans-serif" font-size="15">|0⟩</text>
+  <text x="290" y="192" text-anchor="middle" fill="#e8a33d" font-family="IM Fell English SC,Georgia,serif" font-size="19" font-weight="700">Skull</text>
+  <text x="290" y="218" text-anchor="middle" fill="#b3a68b" font-family="Barlow Condensed,Helvetica,sans-serif" font-size="14">Dead — flip it</text>
+  <text x="290" y="248" text-anchor="middle" fill="#9d6fa8" font-family="Barlow Condensed,Helvetica,sans-serif" font-size="15">|0⟩</text>
 
   <!-- spinning clockwise -->
   <g transform="translate(420,58)">
     <ellipse cx="50" cy="50" rx="15" ry="50" fill="url(#gold)" opacity=".35"/>
     <rect x="46" y="2" width="8" height="96" rx="4" fill="url(#rim)"/>
-    <path d="M18 18 A45 45 0 0 1 82 18" fill="none" stroke="#cfaaff" stroke-width="3" stroke-linecap="round"/>
-    <path d="M82 18 l-3 -11 l12 4 z" fill="#cfaaff"/>
+    <path d="M18 18 A45 45 0 0 1 82 18" fill="none" stroke="#dfc4e6" stroke-width="3" stroke-linecap="round"/>
+    <path d="M82 18 l-3 -11 l12 4 z" fill="#dfc4e6"/>
   </g>
-  <text x="470" y="192" text-anchor="middle" fill="#ffd166" font-family="Georgia,serif" font-size="19" font-weight="700">Spinning ↻</text>
-  <text x="470" y="218" text-anchor="middle" fill="#a494c0" font-family="Inter,sans-serif" font-size="14">50/50 — Summon it</text>
-  <text x="470" y="248" text-anchor="middle" fill="#9b5de5" font-family="Inter,sans-serif" font-size="15">|+⟩</text>
+  <text x="470" y="192" text-anchor="middle" fill="#e8a33d" font-family="IM Fell English SC,Georgia,serif" font-size="19" font-weight="700">Spinning ↻</text>
+  <text x="470" y="218" text-anchor="middle" fill="#b3a68b" font-family="Barlow Condensed,Helvetica,sans-serif" font-size="14">50/50 — Summon it</text>
+  <text x="470" y="248" text-anchor="middle" fill="#9d6fa8" font-family="Barlow Condensed,Helvetica,sans-serif" font-size="15">|+⟩</text>
 
   <!-- spinning counter-clockwise -->
   <g transform="translate(600,58)">
     <ellipse cx="50" cy="50" rx="15" ry="50" fill="url(#gold)" opacity=".35"/>
     <rect x="46" y="2" width="8" height="96" rx="4" fill="url(#rim)"/>
-    <path d="M82 18 A45 45 0 0 0 18 18" fill="none" stroke="#cfaaff" stroke-width="3" stroke-linecap="round"/>
-    <path d="M18 18 l3 -11 l-12 4 z" fill="#cfaaff"/>
+    <path d="M82 18 A45 45 0 0 0 18 18" fill="none" stroke="#dfc4e6" stroke-width="3" stroke-linecap="round"/>
+    <path d="M18 18 l3 -11 l-12 4 z" fill="#dfc4e6"/>
   </g>
-  <text x="650" y="192" text-anchor="middle" fill="#ffd166" font-family="Georgia,serif" font-size="19" font-weight="700">Spinning ↺</text>
-  <text x="650" y="218" text-anchor="middle" fill="#a494c0" font-family="Inter,sans-serif" font-size="14">50/50 — the other way</text>
-  <text x="650" y="248" text-anchor="middle" fill="#9b5de5" font-family="Inter,sans-serif" font-size="15">|−⟩</text>
+  <text x="650" y="192" text-anchor="middle" fill="#e8a33d" font-family="IM Fell English SC,Georgia,serif" font-size="19" font-weight="700">Spinning ↺</text>
+  <text x="650" y="218" text-anchor="middle" fill="#b3a68b" font-family="Barlow Condensed,Helvetica,sans-serif" font-size="14">50/50 — the other way</text>
+  <text x="650" y="248" text-anchor="middle" fill="#9d6fa8" font-family="Barlow Condensed,Helvetica,sans-serif" font-size="15">|−⟩</text>
 
   <!-- chained pair -->
   <g transform="translate(762,70)">
     <circle cx="36" cy="38" r="36" fill="url(#gold)" opacity=".9"/>
-    <g fill="#5a2c02" transform="translate(36,38) scale(.72) translate(-50,-50)"><use href="#face"/></g>
+    <g fill="#2a1c10" transform="translate(36,38) scale(.72) translate(-50,-50)"><use href="#face"/></g>
     <circle cx="126" cy="38" r="36" fill="url(#gold)" opacity=".9"/>
-    <g fill="#5a2c02" transform="translate(126,38) scale(.72) translate(-50,-50)"><use href="#face"/></g>
-    <path d="M36 -2 Q81 -34 126 -2" fill="none" stroke="#7ce38b" stroke-width="3.5"
+    <g fill="#2a1c10" transform="translate(126,38) scale(.72) translate(-50,-50)"><use href="#face"/></g>
+    <path d="M36 -2 Q81 -34 126 -2" fill="none" stroke="#63a98c" stroke-width="3.5"
           stroke-dasharray="8 7" stroke-linecap="round"/>
   </g>
-  <text x="843" y="192" text-anchor="middle" fill="#ffd166" font-family="Georgia,serif" font-size="19" font-weight="700">Chained</text>
-  <text x="843" y="218" text-anchor="middle" fill="#a494c0" font-family="Inter,sans-serif" font-size="14">They land together</text>
-  <text x="843" y="248" text-anchor="middle" fill="#9b5de5" font-family="Inter,sans-serif" font-size="15">|00⟩ + |11⟩</text>
+  <text x="843" y="192" text-anchor="middle" fill="#e8a33d" font-family="IM Fell English SC,Georgia,serif" font-size="19" font-weight="700">Chained</text>
+  <text x="843" y="218" text-anchor="middle" fill="#b3a68b" font-family="Barlow Condensed,Helvetica,sans-serif" font-size="14">They land together</text>
+  <text x="843" y="248" text-anchor="middle" fill="#9d6fa8" font-family="Barlow Condensed,Helvetica,sans-serif" font-size="15">|00⟩ + |11⟩</text>
 </svg>

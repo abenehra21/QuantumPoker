@@ -1,41 +1,17 @@
 /*
- * Candy Coven — Quantum Poker
- * ui.js : screens, rendering, and everything the player touches.
+ * Candy Coven — ui.js
+ *
+ * One rule shapes this file: nodes persist. Coins, seats and cards are built
+ * once and then updated in place, so the browser can animate a coin flipping
+ * or a seat sliding round the table. Rebuilding the DOM every frame would
+ * throw all of that away.
  */
 (function (global) {
   'use strict';
 
-  var Q = global.Q, E = global.Engine;
+  var Q = global.Q, E = global.Engine, Art = global.Art, Sound = global.Sound;
 
-  /* ------------------------------------------------------------------ *
-   * Art
-   * ------------------------------------------------------------------ */
-
-  var SVG_PUMPKIN =
-    '<svg viewBox="0 0 100 100" aria-hidden="true">' +
-      '<path d="M21 33 L46 42 L23 53 Z"/>' +
-      '<path d="M79 33 L54 42 L77 53 Z"/>' +
-      '<path d="M50 45 L42 61 L58 61 Z"/>' +
-      '<path d="M20 64 L32 69 L38 62 L46 70 L54 62 L62 69 L68 62 L80 65 L73 81 Q50 91 27 81 Z"/>' +
-    '</svg>';
-
-  var SVG_SKULL =
-    '<svg viewBox="0 0 100 100" aria-hidden="true">' +
-      '<circle cx="36" cy="45" r="9.5"/>' +
-      '<circle cx="64" cy="45" r="9.5"/>' +
-      '<path d="M50 53 L43.5 65 L56.5 65 Z"/>' +
-      '<rect x="35" y="71" width="30" height="10" rx="2.5"/>' +
-      '<rect x="44.5" y="71" width="2.6" height="10" fill="rgba(0,0,0,.5)"/>' +
-      '<rect x="52.9" y="71" width="2.6" height="10" fill="rgba(0,0,0,.5)"/>' +
-    '</svg>';
-
-  var CARD_GLYPH = { FLIP: '🦇', HAUNT: '👻', SUMMON: '🕯️', BIND: '⛓️' };
-  var AVATARS = ['🎃', '👻', '🦇', '🕷️', '🧙', '🐈‍⬛', '💀', '🕸️'];
-  var DEFAULT_NAMES = ['Morticia', 'Ichabod', 'Hazel', 'Grimm', 'Wednesday'];
-
-  /* ------------------------------------------------------------------ *
-   * Little helpers
-   * ------------------------------------------------------------------ */
+  /* ------------------------------------------------------------- helpers -- */
 
   function $(sel) { return document.querySelector(sel); }
   function el(tag, cls, text) {
@@ -44,44 +20,52 @@
     if (text !== undefined) n.textContent = text;
     return n;
   }
-  function show(node) { node.hidden = false; }
-  function hide(node) { node.hidden = true; }
+  function show(n) { n.hidden = false; }
+  function hide(n) { n.hidden = true; }
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
   function store(key, value) {
     try {
       if (value === undefined) return localStorage.getItem('cc_' + key);
       localStorage.setItem('cc_' + key, value);
-    } catch (e) { /* private browsing, never mind */ }
+    } catch (e) { /* private window; carry on */ }
     return null;
   }
+  var REDUCED = global.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-  /* ------------------------------------------------------------------ *
-   * UI state
-   * ------------------------------------------------------------------ */
+  /* --------------------------------------------------------------- state -- */
 
   var game = null;
-  var seats = [];                 // setup rows
-  var selectedCard = null;        // card id being aimed
-  var pickedCoins = [];           // targets chosen so far
-  var curtainedSeat = -1;         // whose gate turn has been unveiled
+  var seats = [];
+  var selectedCard = null;
+  var pickedCoins = [];
+  var curtainedSeat = -1;
   var hint = null;
   var nerd = store('nerd') === '1';
   var peekTimer = null;
+  var coinNodes = [];
+  var seatNodes = {};
+  var potShown = 0;
+  var potTimer = null;
 
-  /* ------------------------------------------------------------------ *
-   * Setup screen
-   * ------------------------------------------------------------------ */
+  var DEFAULT_NAMES = ['Morrow', 'Vesper', 'Crane', 'Ash', 'Wren'];
+
+  /* --------------------------------------------------------------- setup -- */
 
   function initSetup() {
-    seats = [
-      { name: DEFAULT_NAMES[0], avatar: 0 },
-      { name: DEFAULT_NAMES[1], avatar: 1 },
-      { name: DEFAULT_NAMES[2], avatar: 2 }
-    ];
+    seats = [0, 1, 2].map(function (i) {
+      return { name: DEFAULT_NAMES[i], sigil: i };
+    });
     renderSeats();
+    $('#setup-rule').innerHTML = Art.rule();
 
     $('#btn-add-seat').onclick = function () {
       if (seats.length >= 5) return;
-      seats.push({ name: DEFAULT_NAMES[seats.length] || 'Player ' + (seats.length + 1), avatar: seats.length % AVATARS.length });
+      seats.push({ name: DEFAULT_NAMES[seats.length], sigil: seats.length });
+      Sound.card();
       renderSeats();
     };
     $('#btn-remove-seat').onclick = function () {
@@ -90,7 +74,7 @@
       renderSeats();
     };
     $('#btn-start').onclick = startGame;
-    $('#btn-tutorial').onclick = function () { startTutorial(); };
+    $('#btn-tutorial').onclick = startTutorial;
     $('#btn-rules-setup').onclick = openRules;
   }
 
@@ -98,50 +82,55 @@
     var list = $('#seat-list');
     list.innerHTML = '';
     seats.forEach(function (s, i) {
-      var row = el('div', 'seat');
+      var row = el('div', 'seat-row');
 
-      var av = el('button', 'avatar-btn', AVATARS[s.avatar]);
-      av.type = 'button';
-      av.setAttribute('aria-label', 'Change avatar for player ' + (i + 1));
-      av.onclick = function () {
-        s.avatar = (s.avatar + 1) % AVATARS.length;
-        av.textContent = AVATARS[s.avatar];
+      var sig = el('button', 'sigil-btn');
+      sig.type = 'button';
+      sig.innerHTML = Art.sigil(Art.SIGIL_KEYS[s.sigil]);
+      sig.setAttribute('aria-label', 'Change the mark for player ' + (i + 1));
+      sig.onclick = function () {
+        s.sigil = (s.sigil + 1) % Art.SIGIL_KEYS.length;
+        sig.innerHTML = Art.sigil(Art.SIGIL_KEYS[s.sigil]);
       };
 
       var input = document.createElement('input');
       input.value = s.name;
-      input.maxLength = 14;
+      input.maxLength = 12;
       input.setAttribute('aria-label', 'Name for player ' + (i + 1));
       input.oninput = function () { s.name = input.value; };
 
-      row.appendChild(av);
+      row.appendChild(sig);
       row.appendChild(input);
       list.appendChild(row);
     });
+    $('#seat-count-label').textContent = seats.length + ' at the table';
     $('#btn-add-seat').disabled = seats.length >= 5;
     $('#btn-remove-seat').disabled = seats.length <= 2;
   }
 
   function startGame() {
-    var params = new URLSearchParams(location.search);
-    var seedParam = params.get('seed');
+    var seedParam = new URLSearchParams(location.search).get('seed');
     game = new E.Game({
       players: seats.map(function (s, i) {
-        return { name: (s.name || '').trim() || 'Player ' + (i + 1), avatar: AVATARS[s.avatar] };
+        return { name: (s.name || '').trim() || 'Player ' + (i + 1), sigil: Art.SIGIL_KEYS[s.sigil] };
       }),
       seed: seedParam === null ? null : parseInt(seedParam, 10)
     });
     curtainedSeat = -1;
+    coinNodes = [];
+    seatNodes = {};
+    heroCache = null;
+    potShown = 0;
+    $('#seats').innerHTML = '';
+    $('#coin-row').innerHTML = '';
     hide($('#screen-setup'));
     show($('#screen-table'));
+    Sound.card();
     sync();
   }
 
-  /* ------------------------------------------------------------------ *
-   * Main loop
-   * ------------------------------------------------------------------ */
+  /* ----------------------------------------------------------- main loop -- */
 
-  /** Decide which screen or overlay the game state calls for, then draw. */
   function sync() {
     if (!game) return;
     if (game.phase === 'over') { render(); openShowdown(); return; }
@@ -157,98 +146,97 @@
     if (!game) return;
     renderTop();
     renderCoins();
-    renderPlayers();
+    renderTableSeats();
+    renderPot();
+    renderRead();
     renderPrompt();
-    renderHandRail();
-    renderActions();
+    renderTray();
+    renderLedger();
     requestAnimationFrame(drawChains);
   }
 
-  /** Your own cards, face down, so you can see how many you are holding. */
-  function renderHandRail() {
-    var rail = $('#handrail');
-    if (game.phase !== 'betting' || game.actor < 0) { rail.hidden = true; return; }
-    var seat = game.actor;
-    var count = game.handSize(seat);
-    rail.hidden = false;
-    rail.innerHTML = '';
-    var cards = el('div', 'handrail-cards');
-    for (var i = 0; i < count; i++) cards.appendChild(el('div', 'handrail-card', '🎃'));
-    rail.appendChild(cards);
-    rail.appendChild(el('span', 'handrail-label', 'Your hand — tap to peek'));
-    rail.setAttribute('aria-label', 'Peek at your ' + count + ' cards');
-    rail.onclick = function () { openPeek(seat); };
-  }
-
   function renderTop() {
-    $('#round-name').textContent = game.phase === 'gates'
-      ? 'Cards on the Coins'
+    $('#street').textContent = game.phase === 'gates' ? 'Cards on the Coins'
       : E.ROUND_NAMES[Math.min(game.round, 3)];
-    $('#blind-chip').textContent =
-      'Hand ' + game.handNo + ' · blinds ' + game.smallBlind + '/' + game.bigBlind;
-    $('#pot-value').textContent = game.potTotal();
+    $('#street-meta').textContent =
+      'Hand ' + game.handNo + ' — blinds ' + game.smallBlind + '/' + game.bigBlind;
     $('#btn-nerd').setAttribute('aria-pressed', nerd ? 'true' : 'false');
   }
 
-  /** The board belonging to whoever is acting — everyone has their own copy. */
   function activeBoard() {
     var seat = game.actor >= 0 ? game.actor : game.liveSeats()[0];
     return game.players[seat].board;
   }
 
+  /* ---------------------------------------------------------------- coins -- */
+
+  function buildCoin(i) {
+    var slot = el('button', 'coin-slot');
+    slot.type = 'button';
+    slot.dataset.i = String(i);
+
+    var shell = el('div', 'coin-shell');
+    var coin = el('div', 'coin');
+    var d3 = el('div', 'coin-3d');
+    d3.style.animationDelay = (-0.19 * i).toFixed(2) + 's';
+
+    var edge = el('div', 'coin-edge');
+    var front = el('div', 'coin-face coin-front');
+    front.innerHTML = Art.coinFace();
+    var back = el('div', 'coin-face coin-back');
+    back.innerHTML = Art.coinSkull();
+    d3.appendChild(edge); d3.appendChild(front); d3.appendChild(back);
+    coin.appendChild(d3);
+    shell.appendChild(coin);
+
+    var meta = el('div', 'coin-meta');
+    var no = el('span', 'coin-no', 'Coin ' + (i + 1));
+    var tag = el('span', 'coin-tag');
+    var ket = el('span', 'coin-ket');
+    meta.appendChild(no); meta.appendChild(tag); meta.appendChild(ket);
+
+    slot.appendChild(shell);
+    slot.appendChild(meta);
+
+    var node = { slot: slot, coin: coin, tag: tag, ket: ket, kind: null };
+    coinNodes[i] = node;
+    return slot;
+  }
+
   function renderCoins() {
     var row = $('#coin-row');
+    if (!coinNodes.length || row.children.length !== game.coins) {
+      row.innerHTML = '';
+      coinNodes = [];
+      for (var k = 0; k < game.coins; k++) row.appendChild(buildCoin(k));
+    }
+
     var board = activeBoard();
     var chains = Q.findChains(board);
-    row.innerHTML = '';
 
     for (var i = 0; i < game.coins; i++) {
+      var n = coinNodes[i];
       var revealed = i < game.revealed;
       var info = revealed ? Q.readCoin(board, i) : null;
       var kind = revealed ? info.kind : 'hidden';
+      var chain = revealed ? chainFor(chains, i) : null;
 
-      var slot = el('button', 'coin-slot');
-      slot.type = 'button';
-      slot.dataset.i = String(i);
-
-      var coin = el('div', 'coin');
-      coin.dataset.kind = kind;
-      var d3 = el('div', 'coin-3d');
-      // Offset each coin's spin, otherwise the whole row goes edge-on together
-      // and the table appears to blink.
-      d3.style.animationDelay = (-0.19 * i).toFixed(2) + 's';
-      var front = el('div', 'coin-face coin-front');
-      front.innerHTML = SVG_PUMPKIN;
-      var back = el('div', 'coin-face coin-back');
-      back.innerHTML = SVG_SKULL;
-      var edge = el('div', 'coin-edge');
-      d3.appendChild(edge); d3.appendChild(front); d3.appendChild(back);
-      coin.appendChild(d3);
-
-      var meta = el('div', 'coin-meta');
-      meta.appendChild(el('span', 'coin-no', 'COIN ' + (i + 1)));
-      if (revealed) {
-        var chain = chainFor(chains, i);
-        var tag = el('span', 'coin-tag ' + tagClass(kind, chain));
-        tag.textContent = tagText(kind, chain, i);
-        meta.appendChild(tag);
-        if (nerd) {
-          var k = el('span', 'coin-ket');
-          k.textContent = info.ket || ('P↑ ' + info.up.toFixed(2));
-          meta.appendChild(k);
-        }
+      if (n.kind !== kind) {
+        // A coin that has just settled deserves to be heard.
+        if (n.kind && (kind === 'up' || kind === 'down')) Sound.thud();
+        n.coin.dataset.kind = kind;
+        n.kind = kind;
       }
 
-      slot.appendChild(coin);
-      slot.appendChild(meta);
-      slot.setAttribute('aria-label', coinAria(i, revealed, info, chainFor(chains, i)));
-
-      wireCoin(slot, i, revealed);
-      row.appendChild(slot);
+      n.tag.className = 'coin-tag ' + tagClass(kind, chain);
+      n.tag.textContent = revealed ? tagText(kind, chain) : '';
+      n.tag.hidden = !revealed;
+      n.ket.textContent = nerd && revealed ? (info.ket || 'P↑ ' + info.up.toFixed(2)) : '';
+      n.slot.setAttribute('aria-label', coinAria(i, revealed, info, chain));
+      wireCoin(n, i, revealed);
     }
 
     row.dataset.chains = JSON.stringify(chains);
-    renderLegend(board, chains);
   }
 
   function chainFor(chains, i) {
@@ -266,9 +254,9 @@
     return '';
   }
 
-  function tagText(kind, chain, i) {
+  function tagText(kind, chain) {
     if (chain) return (chain.same ? '⛓ = ' : '⛓ ≠ ') + (chain.partner + 1);
-    if (kind === 'up') return 'FACE-UP';
+    if (kind === 'up') return 'face-up';
     if (kind === 'down') return 'dead';
     if (kind === 'cw') return '↻ 50%';
     if (kind === 'ccw') return '↺ 50%';
@@ -277,64 +265,36 @@
 
   function coinAria(i, revealed, info, chain) {
     if (!revealed) return 'Coin ' + (i + 1) + ', not turned over yet';
-    var what = { up: 'face-up, a sure point', down: 'skull side up, dead',
-                 cw: 'spinning clockwise, even odds', ccw: 'spinning counter-clockwise, even odds',
-                 murky: 'chained, even odds' }[info.kind];
-    return 'Coin ' + (i + 1) + ', ' + what +
-      (chain ? ', chained to coin ' + (chain.partner + 1) + (chain.same ? ', lands the same' : ', lands opposite') : '');
+    var what = {
+      up: 'face-up, a sure point', down: 'skull side up, dead',
+      cw: 'spinning clockwise, even odds', ccw: 'spinning counter-clockwise, even odds',
+      murky: 'chained, even odds'
+    }[info.kind];
+    return 'Coin ' + (i + 1) + ', ' + what + (chain
+      ? ', chained to coin ' + (chain.partner + 1) + (chain.same ? ', lands the same' : ', lands opposite')
+      : '');
   }
 
-  function renderLegend(board, chains) {
-    var legend = $('#coin-legend');
-    // Only chains between coins already turned over. Counting the hidden ones
-    // would tell the table something it has not paid to see.
-    chains = chains.filter(function (c) { return c.a < game.revealed && c.b < game.revealed; });
-    if (hint) { legend.textContent = '\u{1F4A1} ' + hint.label; return; }
-    if (game.phase === 'gates' && selectedCard) {
-      var card = E.CARDS[selectedCard];
-      legend.textContent = pickedCoins.length < card.arity
-        ? 'Tap ' + (card.arity - pickedCoins.length) + ' coin' + (card.arity - pickedCoins.length > 1 ? 's' : '') + ' to aim ' + card.name + '.'
-        : '';
-      return;
-    }
-    if (game.revealed === 0) {
-      legend.textContent = 'No coins on the table yet — bet on nerve alone.';
-      return;
-    }
-    var sure = 0, i;
-    for (i = 0; i < game.revealed; i++) if (Q.readCoin(board, i).kind === 'up') sure++;
-    var expected = Q.expectedScore(board, game.revealed);
-    var text = sure + ' locked face-up · ' + expected.toFixed(1) + ' expected out of ' + game.revealed;
-    if (chains.length) {
-      text += ' · ' + chains.map(function (c) {
-        return 'coins ' + (c.a + 1) + ' and ' + (c.b + 1) + ' land ' + (c.same ? 'together' : 'opposite');
-      }).join('; ');
-    }
-    legend.textContent = text;
-  }
+  function wireCoin(n, i, revealed) {
+    var live = game.phase === 'gates' && selectedCard && revealed;
+    n.slot.disabled = !live;
+    n.slot.classList.toggle('pickable', !!live);
+    n.slot.classList.toggle('picked', pickedCoins.indexOf(i) !== -1);
+    n.slot.classList.toggle('hinted', !!(hint && hint.targets.indexOf(i) !== -1));
 
-  function wireCoin(slot, i, revealed) {
-    var interactive = game.phase === 'gates' && selectedCard && revealed;
-    slot.disabled = !interactive;
-    if (interactive) slot.classList.add('pickable');
-    if (pickedCoins.indexOf(i) !== -1) slot.classList.add('picked');
-    if (hint && hint.targets.indexOf(i) !== -1) slot.classList.add('hinted');
-
-    if (!interactive) return;
-
-    slot.onclick = function () { pickCoin(i); };
-    slot.onmouseenter = function () {
+    n.slot.onclick = live ? function () { pickCoin(i); } : null;
+    n.slot.onmouseenter = live ? function () {
       var card = E.CARDS[selectedCard];
       var targets = pickedCoins.concat([i]);
       if (targets.length !== card.arity) return;
       if (card.arity === 2 && targets[0] === targets[1]) return;
       var pv = E.previewCard(game.players[game.actor].board, selectedCard, targets, game.coins);
-      if (pv) {
-        $('#coin-legend').textContent = card.name + ' → ' + pv.text +
-          (pv.delta > 0.001 ? '  (+' + pv.delta.toFixed(1) + ')' : pv.delta < -0.001 ? '  (' + pv.delta.toFixed(1) + ')' : '');
-      }
-    };
-    slot.onmouseleave = function () { renderLegend(activeBoard(), Q.findChains(activeBoard())); };
+      if (!pv) return;
+      var swing = pv.delta > 0.001 ? ' <span class="hot">+' + pv.delta.toFixed(1) + '</span>'
+        : pv.delta < -0.001 ? ' ' + pv.delta.toFixed(1) : '';
+      $('#read').innerHTML = esc(card.name) + ' → ' + esc(pv.text) + swing;
+    } : null;
+    n.slot.onmouseleave = live ? function () { renderRead(); } : null;
   }
 
   function pickCoin(i) {
@@ -346,20 +306,20 @@
     selectedCard = null;
     pickedCoins = [];
     hint = null;
-    if (!res.ok) { $('#coin-legend').textContent = res.why; }
+    if (res.ok) Sound.cast();
     render();
+    if (!res.ok) $('#read').textContent = res.why;
   }
-
-  /* ---- chains drawn between coins ---- */
 
   function drawChains() {
     var svg = $('#chain-layer');
-    if (!svg) return;
+    if (!svg || !game) return;
     svg.innerHTML = '';
     var row = $('#coin-row');
     if (!row || !row.dataset.chains) return;
     var chains = JSON.parse(row.dataset.chains);
     var wrap = svg.parentNode.getBoundingClientRect();
+    if (!wrap.width) return;
     svg.setAttribute('viewBox', '0 0 ' + wrap.width + ' ' + wrap.height);
 
     chains.forEach(function (ch) {
@@ -369,105 +329,232 @@
       var ra = A.getBoundingClientRect(), rb = B.getBoundingClientRect();
       var x1 = ra.left + ra.width / 2 - wrap.left;
       var x2 = rb.left + rb.width / 2 - wrap.left;
-      var y = ra.top + ra.height * 0.16 - wrap.top;
-      var lift = Math.min(46, 18 + Math.abs(x2 - x1) * 0.15);
+      var y = ra.top + ra.height * 0.14 - wrap.top;
+      var lift = Math.min(44, 16 + Math.abs(x2 - x1) * 0.14);
+      var stroke = ch.same ? '#63a98c' : '#9d6fa8';
 
       var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
       path.setAttribute('d', 'M' + x1 + ' ' + y + ' Q' + ((x1 + x2) / 2) + ' ' + (y - lift) + ' ' + x2 + ' ' + y);
       path.setAttribute('fill', 'none');
-      path.setAttribute('stroke', ch.same ? '#7ce38b' : '#ff9ad2');
-      path.setAttribute('stroke-width', '2.5');
+      path.setAttribute('stroke', stroke);
+      path.setAttribute('stroke-width', '2');
       path.setAttribute('stroke-linecap', 'round');
-      path.setAttribute('stroke-dasharray', '7 6');
-      path.setAttribute('opacity', '.85');
-      path.style.filter = 'drop-shadow(0 0 6px ' + (ch.same ? 'rgba(124,227,139,.8)' : 'rgba(255,154,210,.8)') + ')';
+      path.setAttribute('stroke-dasharray', '6 5');
+      path.style.filter = 'drop-shadow(0 0 5px ' + stroke + ')';
       svg.appendChild(path);
     });
   }
 
-  /* ------------------------------------------------------------------ *
-   * Players strip
-   * ------------------------------------------------------------------ */
+  /* ---------------------------------------------------------------- seats -- */
 
-  function renderPlayers() {
-    var box = $('#players');
-    box.innerHTML = '';
+  /**
+   * Seats sit on an ellipse with whoever is acting placed at the bottom, the
+   * way an online poker room always seats you nearest the camera. When the
+   * turn passes, the whole table rotates — the CSS transition does the work.
+   */
+  function renderTableSeats() {
+    var box = $('#seats');
+    var order = game.players.map(function (p) { return p.seat; });
+    var hero = game.actor >= 0 ? game.actor : order[0];
+    var n = order.length;
+    var start = order.indexOf(hero);
+    var others = n - 1;
+
     game.players.forEach(function (p) {
-      var card = el('div', 'player' + (p.seat === game.actor ? ' turn' : '') +
-        (p.folded && !p.out ? ' folded' : '') + (p.out ? ' out' : ''));
-      card.appendChild(el('div', 'player-av', p.avatar));
-      card.appendChild(el('div', 'player-name', p.name));
-      card.appendChild(el('div', 'player-stack', p.out ? 'out' : String(p.points)));
-      card.appendChild(el('div', 'player-bet', p.bet > 0 ? 'bet ' + p.bet : (p.folded && !p.out ? 'folded' : '')));
-      if (p.allIn && !p.out) card.appendChild(el('span', 'badge allin', 'ALL IN'));
-      else if (p.seat === game.dealer && !p.out) card.appendChild(el('span', 'badge dealer', 'D'));
-      box.appendChild(card);
+      var node = seatNodes[p.seat];
+      if (!node) {
+        node = buildSeat(p);
+        seatNodes[p.seat] = node;
+        box.appendChild(node.root);
+      }
+
+      var idx = (order.indexOf(p.seat) - start + n) % n;
+      var isHero = idx === 0;
+
+      // The player to act comes off the felt and onto the rail in front of
+      // them; the rest fan out across the far side of the table.
+      node.root.hidden = isHero;
+      if (!isHero) {
+        var t = others === 1 ? 0.5 : (idx - 1) / (others - 1);
+        if (narrowTable()) {
+          // Not enough felt for an orbit — line them up along the top edge.
+          node.root.style.left = (16 + t * 68).toFixed(2) + '%';
+          node.root.style.top = '13%';
+        } else {
+          var rad = (194 + t * 152) * Math.PI / 180;
+          node.root.style.left = (50 + 40 * Math.cos(rad)).toFixed(2) + '%';
+          node.root.style.top = (50 + 38 * Math.sin(rad)).toFixed(2) + '%';
+        }
+      }
+      paintSeat(node, p);
     });
+
+    paintSeat(heroNode(), game.players[hero], true);
+  }
+
+  function paintSeat(node, p, isHero) {
+    node.root.classList.toggle('acting', p.seat === game.actor);
+    node.root.classList.toggle('folded', p.folded && !p.out);
+    node.root.classList.toggle('out', p.out);
+    node.stack.textContent = p.out ? 'out' : String(p.points);
+    node.bet.textContent = p.bet > 0 ? p.bet + ' in' : (p.folded && !p.out ? 'folded' : '');
+    if (isHero) {
+      node.name.textContent = p.name;
+      node.sig.innerHTML = Art.sigil(p.sigil);
+    }
+    var flag = p.out ? '' : p.allIn ? 'all in' : p.seat === game.dealer ? 'dealer' : '';
+    node.flag.textContent = flag;
+    node.flag.hidden = !flag;
+    node.flag.className = 'seat-flag' + (p.allIn && !p.out ? ' allin' : '');
+  }
+
+  function narrowTable() { return global.innerWidth <= 620; }
+
+  var heroCache = null;
+  function heroNode() {
+    if (heroCache) return heroCache;
+    var root = $('#hero');
+    root.innerHTML = '';
+    var sig = el('span', 'hero-sigil');
+    var name = el('span', 'hero-name', '');
+    var stack = el('span', 'seat-stack', '0');
+    var bet = el('span', 'seat-bet', '');
+    var flag = el('span', 'seat-flag', '');
+    flag.hidden = true;
+    root.appendChild(sig); root.appendChild(name);
+    root.appendChild(stack); root.appendChild(bet); root.appendChild(flag);
+    heroCache = { root: root, sig: sig, name: name, stack: stack, bet: bet, flag: flag };
+    return heroCache;
+  }
+
+  function buildSeat(p) {
+    var root = el('div', 'seat');
+    var head = el('div', 'seat-head');
+    head.innerHTML = Art.sigil(p.sigil);
+    head.appendChild(el('span', 'seat-name', p.name));
+    var stack = el('div', 'seat-stack', '0');
+    var bet = el('div', 'seat-bet', '');
+    var flag = el('span', 'seat-flag', '');
+    flag.hidden = true;
+    root.appendChild(head); root.appendChild(stack); root.appendChild(bet); root.appendChild(flag);
+    return { root: root, stack: stack, bet: bet, flag: flag };
+  }
+
+  /* ------------------------------------------------------------------ pot -- */
+
+  function renderPot() {
+    var target = game.potTotal();
+    var node = $('#pot-value');
+    if (potTimer) { clearInterval(potTimer); potTimer = null; }
+    if (REDUCED || Math.abs(target - potShown) < 2) {
+      potShown = target;
+      node.textContent = target;
+    } else {
+      // Count the pot up rather than snapping it. Money should feel like it moves.
+      var step = Math.max(1, Math.round(Math.abs(target - potShown) / 12));
+      potTimer = setInterval(function () {
+        potShown += potShown < target ? step : -step;
+        if ((step > 0 && Math.abs(target - potShown) <= step)) potShown = target;
+        node.textContent = potShown;
+        if (potShown === target) { clearInterval(potTimer); potTimer = null; }
+      }, 26);
+    }
+
+    var strip = $('#pot-candy');
+    strip.innerHTML = '';
+    var bd = E.toCandy(target);
+    E.CANDY.forEach(function (c) {
+      var count = Math.min(bd[c.key], 6);
+      for (var i = 0; i < count; i++) {
+        var w = el('span', 'candy-' + c.key);
+        w.innerHTML = Art.candy(c.key);
+        strip.appendChild(w);
+      }
+    });
+  }
+
+  /* ------------------------------------------------------- read + prompt -- */
+
+  function renderRead() {
+    var node = $('#read');
+    if (hint) { node.innerHTML = '<span class="hot">' + esc(hint.label) + '</span>'; return; }
+    if (game.revealed === 0) { node.textContent = 'No coins down yet — this is pure nerve'; return; }
+    var board = activeBoard();
+    var sure = 0, i;
+    for (i = 0; i < game.revealed; i++) if (Q.readCoin(board, i).kind === 'up') sure++;
+    var chains = Q.findChains(board).filter(function (c) {
+      return c.a < game.revealed && c.b < game.revealed;
+    });
+    var text = sure + ' locked · ' + Q.expectedScore(board, game.revealed).toFixed(1) +
+      ' expected of ' + game.revealed;
+    if (chains.length) {
+      text += ' · ' + chains.map(function (c) {
+        return (c.a + 1) + ' and ' + (c.b + 1) + (c.same ? ' land together' : ' land opposite');
+      }).join('; ');
+    }
+    node.textContent = text;
   }
 
   function renderPrompt() {
-    var p = $('#prompt');
+    var node = $('#prompt');
     if (game.phase === 'gates') {
-      var actor = game.players[game.actor];
-      p.innerHTML = '<span><em>' + esc(actor.name) + '</em> — play cards on your coins, then end your turn.</span>';
+      node.innerHTML = '<em>' + esc(game.players[game.actor].name) +
+        '</em> — put cards on your coins, then end your turn.';
     } else if (game.phase === 'betting') {
-      var a = game.players[game.actor];
       var owe = game.toCall(game.actor);
-      p.innerHTML = '<span><em>' + esc(a.name) + '</em> — ' +
-        (owe > 0 ? 'call ' + owe + ', raise, or fold.' : 'check, bet, or fold.') + '</span>';
+      node.innerHTML = '<em>' + esc(game.players[game.actor].name) + '</em> — ' +
+        (owe > 0 ? 'call ' + owe + ', raise, or fold.' : 'check, bet, or fold.');
     } else {
-      p.textContent = game.message;
+      node.textContent = game.message;
     }
   }
 
-  function esc(s) {
-    return String(s).replace(/[&<>"]/g, function (c) {
-      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
-    });
+  function renderLedger() {
+    var recent = game.log.slice(-3).reverse();
+    $('#ledger').innerHTML = recent.length
+      ? recent.map(function (line, i) { return i === 0 ? '<b>' + esc(line) + '</b>' : esc(line); }).join('  ·  ')
+      : '';
   }
 
-  /* ------------------------------------------------------------------ *
-   * Action bar
-   * ------------------------------------------------------------------ */
+  /* ----------------------------------------------------------------- tray -- */
 
-  function renderActions() {
-    var bar = $('#actionbar');
-    bar.innerHTML = '';
-    if (game.phase === 'betting') renderBetting(bar);
-    else if (game.phase === 'gates') renderGates(bar);
+  function renderTray() {
+    var tray = $('#tray-main');
+    tray.innerHTML = '';
+    if (game.phase === 'betting') renderBetting(tray);
+    else if (game.phase === 'gates') renderGates(tray);
   }
 
-  function renderBetting(bar) {
+  function renderBetting(tray) {
     var seat = game.actor, p = game.players[seat];
     var owe = game.toCall(seat);
-    var minTo = game.minRaiseTo(seat);
     var maxTo = p.bet + p.points;
 
-    var row = el('div', 'action-row');
+    tray.appendChild(buildFaceDown(seat));
 
+    var row = el('div', 'row');
     var fold = el('button', 'btn danger', 'Fold');
     fold.type = 'button';
-    fold.onclick = function () { game.fold(); afterBet(); };
+    fold.onclick = function () { Sound.fold(); game.fold(); afterBet(); };
     row.appendChild(fold);
 
-    var call = el('button', 'btn primary', owe === 0 ? 'Check' : (owe >= p.points ? 'Call all in ' + owe : 'Call ' + owe));
+    var call = el('button', 'btn primary',
+      owe === 0 ? 'Check' : owe >= p.points ? 'Call all in · ' + owe : 'Call ' + owe);
     call.type = 'button';
-    call.onclick = function () { game.call(); afterBet(); };
+    call.onclick = function () { if (owe > 0) Sound.chip(); game.call(); afterBet(); };
     row.appendChild(call);
-
-    bar.appendChild(row);
+    tray.appendChild(row);
 
     if (maxTo > game.currentBet) {
-      var raiseRow = el('div', 'raise-row');
+      var minTo = game.minRaiseTo(seat);
+      var betRow = el('div', 'bet-row');
       var slider = document.createElement('input');
       slider.type = 'range';
-      slider.min = String(minTo);
-      slider.max = String(maxTo);
-      slider.step = '1';
+      slider.min = String(minTo); slider.max = String(maxTo); slider.step = '1';
       slider.value = String(Math.min(maxTo, minTo));
       slider.setAttribute('aria-label', 'Raise to');
 
-      var amt = el('span', 'raise-amt', slider.value);
+      var amt = el('span', 'bet-amt', slider.value);
       slider.oninput = function () { amt.textContent = slider.value; };
 
       var go = el('button', 'btn', 'Raise');
@@ -475,19 +562,30 @@
       go.onclick = function () {
         var r = game.raiseTo(parseInt(slider.value, 10));
         if (!r.ok) { $('#prompt').textContent = r.why; return; }
-        afterBet();
+        Sound.chip(); afterBet();
       };
-
       var shove = el('button', 'btn', 'All in');
       shove.type = 'button';
-      shove.onclick = function () { game.raiseTo(maxTo); afterBet(); };
+      shove.onclick = function () { game.raiseTo(maxTo); Sound.chip(); afterBet(); };
 
-      raiseRow.appendChild(amt);
-      raiseRow.appendChild(slider);
-      raiseRow.appendChild(go);
-      raiseRow.appendChild(shove);
-      bar.appendChild(raiseRow);
+      betRow.appendChild(amt); betRow.appendChild(slider);
+      betRow.appendChild(go); betRow.appendChild(shove);
+      tray.appendChild(betRow);
     }
+  }
+
+  function buildFaceDown(seat) {
+    var wrap = el('div', 'facedown');
+    var btn = el('button', 'facedown-btn');
+    btn.type = 'button';
+    var cards = el('div', 'fd-cards');
+    for (var i = 0; i < game.handSize(seat); i++) cards.appendChild(el('div', 'fd-card'));
+    btn.appendChild(cards);
+    btn.appendChild(el('span', 'fd-label', 'Your hand — look'));
+    btn.setAttribute('aria-label', 'Look at your cards');
+    btn.onclick = function () { openPeek(seat); };
+    wrap.appendChild(btn);
+    return wrap;
   }
 
   function afterBet() {
@@ -495,49 +593,42 @@
     sync();
   }
 
-  function renderGates(bar) {
+  function renderGates(tray) {
     var seat = game.actor, p = game.players[seat];
 
     var strip = el('div', 'hand-strip');
     E.CARD_IDS.forEach(function (id) {
       var count = p.hand[id] || 0;
-      var card = E.CARDS[id];
-      var btn = el('button', 'card' + (selectedCard === id ? ' selected' : '') +
-        (hint && hint.card === id ? ' hinted' : ''));
-      btn.type = 'button';
-      btn.disabled = count === 0;
-      btn.innerHTML =
-        '<span class="card-glyph">' + CARD_GLYPH[id] + '</span>' +
-        '<span class="card-name">' + card.name + (count > 1 ? ' ×' + count : '') + '</span>' +
-        (nerd ? '<span class="card-gate">' + card.gate + ' gate</span>' : '') +
-        '<span class="card-blurb">' + card.blurb + '</span>';
-      btn.onclick = function () {
-        selectedCard = selectedCard === id ? null : id;
-        pickedCoins = [];
-        hint = null;
-        render();
-      };
-      strip.appendChild(btn);
+      strip.appendChild(buildCard(id, count, {
+        selected: selectedCard === id,
+        hinted: !!(hint && hint.card === id),
+        onPick: function () {
+          selectedCard = selectedCard === id ? null : id;
+          pickedCoins = [];
+          hint = null;
+          if (selectedCard) Sound.card();
+          render();
+        }
+      }));
     });
-    bar.appendChild(strip);
+    tray.appendChild(strip);
 
-    var row = el('div', 'action-row');
-
-    var hintBtn = el('button', 'btn ghost', '💡 Hint');
+    var row = el('div', 'row');
+    var hintBtn = el('button', 'btn ghost', 'Hint');
     hintBtn.type = 'button';
     hintBtn.disabled = game.handSize(seat) === 0;
     hintBtn.onclick = function () {
       var best = game.bestPlay(seat);
       if (!best || best.delta <= 0.001) {
         hint = null;
-        $('#coin-legend').textContent = 'Nothing left that improves your odds. End your turn.';
+        $('#read').textContent = 'Nothing left that improves your odds — end your turn';
         return;
       }
       hint = {
         card: best.card, targets: best.targets,
-        label: 'Play ' + E.CARDS[best.card].name + ' on coin ' +
-               best.targets.map(function (t) { return t + 1; }).join(' → ') +
-               ' — ' + best.text + ' (+' + best.delta.toFixed(1) + ')'
+        label: E.CARDS[best.card].name + ' on ' +
+          best.targets.map(function (t) { return 'coin ' + (t + 1); }).join(' → ') +
+          ' — ' + best.text + ' (+' + best.delta.toFixed(1) + ')'
       };
       selectedCard = null; pickedCoins = [];
       render();
@@ -548,25 +639,57 @@
     end.type = 'button';
     end.onclick = function () {
       selectedCard = null; pickedCoins = []; hint = null;
+      Sound.card();
       game.endTurn();
       sync();
     };
     row.appendChild(end);
-
-    bar.appendChild(row);
+    tray.appendChild(row);
   }
 
-  /* ------------------------------------------------------------------ *
-   * Curtain / peek
-   * ------------------------------------------------------------------ */
+  /**
+   * A card that leans toward the cursor. Costs almost nothing and is most of
+   * the reason a card game feels like objects rather than buttons.
+   */
+  function buildCard(id, count, opts) {
+    var card = E.CARDS[id];
+    var node = el('button', 'card' +
+      (opts.selected ? ' selected' : '') + (opts.hinted ? ' hinted' : ''));
+    node.type = 'button';
+    node.disabled = count === 0 && !opts.static;
+    node.innerHTML =
+      '<span class="card-name">' + card.name + '</span>' +
+      Art.cardArt(id) +
+      '<span class="card-blurb">' + card.blurb + '</span>' +
+      (nerd ? '<span class="card-gate">' + card.gate + '</span>' : '');
+    if (count > 1) {
+      var badge = el('span', 'card-count', String(count));
+      node.appendChild(badge);
+    }
+    if (opts.onPick) node.onclick = opts.onPick;
+
+    if (!REDUCED) {
+      node.onpointermove = function (ev) {
+        var r = node.getBoundingClientRect();
+        var px = (ev.clientX - r.left) / r.width - 0.5;
+        var py = (ev.clientY - r.top) / r.height - 0.5;
+        node.style.transform =
+          'translateY(-10px) rotateX(' + (-py * 13).toFixed(2) + 'deg) rotateY(' +
+          (px * 15).toFixed(2) + 'deg)';
+      };
+      node.onpointerleave = function () { node.style.transform = ''; };
+    }
+    return node;
+  }
+
+  /* -------------------------------------------------------------- curtain -- */
 
   function openCurtain(seat, done) {
     var p = game.players[seat];
-    $('#curtain-avatar').textContent = p.avatar;
+    $('#curtain-sigil').innerHTML = Art.sigil(p.sigil);
     $('#curtain-name').textContent = p.name;
-    $('#curtain-sub').textContent = 'Everyone else, look away. Your coins and cards are private.';
     show($('#curtain'));
-    $('#curtain-go').onclick = function () { hide($('#curtain')); done(); };
+    $('#curtain-go').onclick = function () { hide($('#curtain')); Sound.card(); done(); };
     $('#curtain-go').focus();
   }
 
@@ -577,31 +700,25 @@
     E.CARD_IDS.forEach(function (id) {
       var count = p.hand[id] || 0;
       if (!count) return;
-      var card = E.CARDS[id];
-      var node = el('div', 'card');
-      node.innerHTML =
-        '<span class="card-glyph">' + CARD_GLYPH[id] + '</span>' +
-        '<span class="card-name">' + card.name + (count > 1 ? ' ×' + count : '') + '</span>' +
-        '<span class="card-blurb">' + card.blurb + '</span>';
-      strip.appendChild(node);
+      strip.appendChild(buildCard(id, count, { static: true }));
     });
-    $('#peek-sub').textContent = 'Held by ' + p.name + '. Hides in a few seconds.';
+    $('#peek-sub').textContent = 'Held by ' + p.name + '. Hides shortly.';
     show($('#peek'));
+    Sound.card();
     clearTimeout(peekTimer);
-    peekTimer = setTimeout(closePeek, 6000);
+    peekTimer = setTimeout(closePeek, 7000);
   }
 
   function closePeek() { clearTimeout(peekTimer); hide($('#peek')); }
 
-  /* ------------------------------------------------------------------ *
-   * Showdown
-   * ------------------------------------------------------------------ */
+  /* ------------------------------------------------------------- showdown -- */
 
   var sdTimers = [];
 
   function openShowdown() {
     var body = $('#showdown-body');
     body.innerHTML = '';
+    $('#sd-summary').textContent = '';
     sdTimers.forEach(clearTimeout);
     sdTimers = [];
 
@@ -610,13 +727,16 @@
     $('#showdown-skip').hidden = false;
 
     var contenders = game.players.filter(function (p) { return p.score !== null; });
-    var delay = 0;
-    var step = 340;
+    if (!contenders.length) { show($('#showdown')); finishShowdown(); return; }
+
+    var best = Math.max.apply(null, contenders.map(function (p) { return p.score; }));
+    var rows = [];
+    var delay = 0, step = REDUCED ? 0 : 260;
 
     contenders.forEach(function (p) {
       var sec = el('div', 'sd-player');
       var head = el('div', 'sd-head');
-      head.appendChild(el('span', 'av', p.avatar));
+      head.innerHTML = Art.sigil(p.sigil);
       head.appendChild(el('span', 'nm', p.name));
       sec.appendChild(head);
 
@@ -624,83 +744,104 @@
       var nodes = [];
       p.bits.forEach(function (bit) {
         var c = el('div', 'sd-coin ' + (bit ? 'hit' : 'miss'));
-        c.innerHTML = bit ? SVG_PUMPKIN : SVG_SKULL;
+        c.innerHTML = bit ? Art.coinFace() : Art.coinSkull();
         coins.appendChild(c);
-        nodes.push(c);
+        nodes.push({ node: c, bit: bit });
       });
       sec.appendChild(coins);
 
-      var rank = el('div', 'rank-name' + (p.score === 5 ? ' bloodmoon' : ''), '');
+      var rank = el('div', 'rank' + (p.score === 5 ? ' bloodmoon' : ''), '');
       sec.appendChild(rank);
       body.appendChild(sec);
+      rows.push({ p: p, sec: sec, rank: rank, nodes: nodes });
 
       nodes.forEach(function (c) {
         delay += step;
-        sdTimers.push(setTimeout(function () { c.classList.add('shown'); }, delay));
+        sdTimers.push(setTimeout(function () {
+          c.node.classList.add('shown');
+          if (c.bit) Sound.coin(true); else Sound.thud();
+        }, delay));
       });
-      delay += 160;
+      delay += 140;
       sdTimers.push(setTimeout(function () {
-        rank.textContent = E.rankName(p.score) + ' — ' + p.score + ' face-up';
+        rank.innerHTML = E.rankName(p.score) + ' <span class="n">' + p.score + '</span>';
+        if (p.score === best) sec.classList.add('leader');
+        if (p.score === 5) Sound.bloodMoon();
       }, delay));
     });
 
-    var summary = el('div', 'sd-summary', '');
-    body.appendChild(summary);
-    delay += 420;
-    sdTimers.push(setTimeout(function () { finishShowdown(summary); }, delay));
-
     show($('#showdown'));
+    delay += 380;
+    sdTimers.push(setTimeout(finishShowdown, delay));
 
     $('#showdown-skip').onclick = function () {
       sdTimers.forEach(clearTimeout);
       sdTimers = [];
-      body.querySelectorAll('.sd-coin').forEach(function (c) { c.classList.add('shown'); });
-      contenders.forEach(function (p, i) {
-        body.querySelectorAll('.rank-name')[i].textContent = E.rankName(p.score) + ' — ' + p.score + ' face-up';
+      rows.forEach(function (r) {
+        r.nodes.forEach(function (c) { c.node.classList.add('shown'); });
+        r.rank.innerHTML = E.rankName(r.p.score) + ' <span class="n">' + r.p.score + '</span>';
+        if (r.p.score === best) r.sec.classList.add('leader');
       });
-      finishShowdown(summary);
+      finishShowdown();
     };
   }
 
-  function finishShowdown(summary) {
-    summary.textContent = game.results.summary;
+  function finishShowdown() {
+    $('#sd-summary').textContent = game.results.summary;
+    Sound.win();
     $('#showdown-skip').hidden = true;
     var next = $('#showdown-next');
     next.hidden = false;
-    next.textContent = game.gameOver() ? 'See the damage' : 'Next hand';
+    next.textContent = game.gameOver() ? 'Settle up' : 'Next hand';
     next.onclick = function () {
       hide($('#showdown'));
-      if (game.gameOver()) { openBank(); return; }
+      if (game.gameOver()) { Sound.bust(); openBank(); return; }
       curtainedSeat = -1;
       selectedCard = null; pickedCoins = []; hint = null;
+      potShown = 0;
       game.nextHand();
+      Sound.card();
       sync();
     };
     next.focus();
   }
 
-  /* ------------------------------------------------------------------ *
-   * Bank
-   * ------------------------------------------------------------------ */
+  /* ----------------------------------------------------------------- bank -- */
 
   function openBank() {
     var body = $('#bank-body');
     body.innerHTML = '';
     var sorted = game.players.slice().sort(function (a, b) { return b.points - a.points; });
     var payouts = E.settlePool(sorted);
+
     sorted.forEach(function (p, i) {
       var row = el('div', 'bank-row');
-      row.appendChild(el('span', 'player-av', p.avatar));
+      var sig = el('span');
+      sig.innerHTML = Art.sigil(p.sigil);
+      row.appendChild(sig);
+
       var mid = el('div');
-      mid.appendChild(el('div', 'bank-name', p.name + (p.points > 0 && i === 0 ? ' 👑' : '')));
-      mid.appendChild(el('div', 'bank-candy', E.describeStash(payouts[i]) +
-        (payouts[i].short ? '  (+' + payouts[i].short + ' owed)' : '')));
+      mid.appendChild(el('div', 'bank-name', p.name + (p.points > 0 && i === 0 ? ' — takes the table' : '')));
+      var candy = el('div', 'bank-candy');
+      var any = false;
+      E.CANDY.forEach(function (c) {
+        if (!payouts[i][c.key]) return;
+        any = true;
+        var s = el('span');
+        s.innerHTML = Art.candy(c.key) + '<span>' + payouts[i][c.key] + '</span>';
+        s.className = 'candy-' + c.key;
+        candy.appendChild(s);
+      });
+      if (!any) candy.appendChild(el('span', '', 'nothing'));
+      mid.appendChild(candy);
       row.appendChild(mid);
+
       var delta = p.points - p.startPoints;
       row.appendChild(el('span', 'bank-delta ' + (delta >= 0 ? 'up' : 'down'),
         (delta >= 0 ? '+' : '') + delta));
       body.appendChild(row);
     });
+
     show($('#bank'));
     $('#bank-close').onclick = function () { hide($('#bank')); };
     $('#bank-again').onclick = function () {
@@ -711,139 +852,146 @@
     };
   }
 
-  /* ------------------------------------------------------------------ *
-   * Rules sheet
-   * ------------------------------------------------------------------ */
+  /* ---------------------------------------------------------------- rules -- */
 
   function openRules() {
-    var body = $('#rules-body');
-    body.innerHTML =
-      '<div><h3>The point</h3><p>Five cursed coins sit on the table. At the end of the hand they all land. ' +
-      'Every coin that lands <b>face-up</b> — jack-o&#39;-lantern showing — is one point. Most points takes the pot. ' +
-      'You bet candy along the way, exactly like poker.</p></div>' +
+    var coinRow = function (cls, art, name, text) {
+      return '<tr><td><span class="chip ' + cls + '">' + art + '</span>' + name + '</td><td>' + text + '</td></tr>';
+    };
+    $('#rules-body').innerHTML =
+      '<div><h3>The point</h3><p>Five cursed coins lie on the table. At the end of the hand they all ' +
+      'land. Every coin showing its <b>face</b> is one point, and the most points takes the pot. ' +
+      'You bet candy between each coin, exactly as you would at poker.</p></div>' +
 
-      '<div><h3>Reading a coin</h3>' +
-      '<table class="rules-table">' +
-      '<tr><td><span class="mini-coin up">' + SVG_PUMPKIN + '</span> Face-up</td><td>A sure point. Nothing can take it but your own card.</td></tr>' +
-      '<tr><td><span class="mini-coin down">' + SVG_SKULL + '</span> Skull</td><td>Dead. Worth nothing unless you flip it.</td></tr>' +
-      '<tr><td>↻ Spinning</td><td>Fifty-fifty. Which way it spins decides which card can catch it.</td></tr>' +
-      '<tr><td>⛓ Chained</td><td>Two coins tied together. They always land the same way — or always opposite.</td></tr>' +
+      '<div><h3>Reading a coin</h3><table class="rules-table">' +
+      coinRow('up', Art.coinFace(), 'Face-up', 'A point, banked. Only your own card can spoil it.') +
+      coinRow('down', Art.coinSkull(), 'Skull', 'Dead. Worth nothing unless you turn it.') +
+      '<tr><td>↻ &nbsp;Spinning</td><td>Even money. Which way it turns decides which card can catch it.</td></tr>' +
+      '<tr><td>⛓ &nbsp;Chained</td><td>Two coins bound together. They always land alike — or always opposed.</td></tr>' +
       '</table></div>' +
 
       '<div><h3>Your cards</h3><table class="rules-table">' +
       E.CARD_IDS.map(function (id) {
         var c = E.CARDS[id];
-        return '<tr><td>' + CARD_GLYPH[id] + ' <b>' + c.name + '</b></td><td>' + c.blurb + '</td></tr>';
+        return '<tr><td><span class="rules-mini">' + Art.cardArt(id) + '<b>' + c.name + '</b></span></td>' +
+          '<td>' + c.blurb + '</td></tr>';
       }).join('') +
-      '</table><p>Three cards each, dealt face-down. You play them after the last round of betting. ' +
-      'Flip, Haunt and Bind undo themselves — play one twice and the coin is back where it started. ' +
-      '<b>Summon is different</b>: it walks the coin round a four-step loop — ' +
-      'dead → ↻ → face-up → ↺ — so spending two in a row on the same coin will cost you.</p></div>' +
+      '</table><p>Three each, dealt face down, played after the final bet. Flip, Haunt and Bind undo ' +
+      'themselves — play one twice and nothing has happened. <b>Summon does not.</b> It walks a coin ' +
+      'round a loop of four — dead, ↻, face-up, ↺ — so a second Summon throws away the point you just won.</p></div>' +
 
-      '<div><h3>The candy</h3><table class="rules-table"><tr><th>Sweet</th><th class="val">Worth</th></tr>' +
+      '<div><h3>The candy</h3><table class="rules-table">' +
       E.CANDY.map(function (c) {
-        return '<tr><td>' + c.name + '</td><td class="val">' + c.value + '</td></tr>';
+        return '<tr><td><span class="rules-mini candy-' + c.key + '">' + Art.candy(c.key) +
+          '</span> ' + c.name + '</td><td class="val">' + c.value + '</td></tr>';
       }).join('') +
-      '</table><p>Everyone starts with 200 points of candy. Blinds climb every six hands so the night actually ends. ' +
-      'The app keeps score; the candy moves for real.</p></div>' +
+      '</table><p>Two hundred points each to start. Blinds double every six hands, so the night ends ' +
+      'before the candy does. Keep score here; move the sweets for real.</p></div>' +
 
       '<div><h3>Hand ranks</h3><p>' +
-      E.RANKS.map(function (r, i) { return i + ' → <b>' + r + '</b>'; }).join(' · ') +
+      E.RANKS.map(function (r, i) { return i + ' → <b>' + r + '</b>'; }).join(' &nbsp;·&nbsp; ') +
       '</p></div>' +
 
-      '<div><h3>The quantum bit</h3><p>The coins are real qubits and the cards are real quantum gates — ' +
-      'Flip is X, Haunt is Hadamard, Summon is ZH, Bind is CNOT. Spinning is superposition; chained is entanglement. ' +
-      'Hit the <b>ψ</b> button any time to see the actual states. You do not need any of this to win.</p></div>';
+      '<div><h3>Underneath</h3><p>The coins are qubits and the cards are quantum gates — Flip is X, ' +
+      'Haunt is Hadamard, Summon is ZH, Bind is CNOT. Spinning is superposition; chained is ' +
+      'entanglement. Press <b>Ψ</b> to see the real states. You need none of it to win.</p></div>';
 
     show($('#rules'));
     $('#rules-close').onclick = function () { hide($('#rules')); };
   }
 
-  /* ------------------------------------------------------------------ *
-   * Tutorial — two coins, two cards, sixty seconds
-   * ------------------------------------------------------------------ */
+  /* ------------------------------------------------------------- tutorial -- */
 
   var tut = null;
 
+  var TUT_STEPS = [
+    {
+      title: 'The coins',
+      text: 'Two cursed coins. The left one landed <b>face-up</b> — a point, already yours. ' +
+            'The right one is still <b>spinning</b>: a coin flip, worth half a point on average.',
+      next: 'Go on'
+    },
+    {
+      title: 'What you want',
+      text: 'Coins face-up when the spinning stops. A spinning coin is not bad luck — it is the ' +
+            '<b>opening</b>, because the right card can catch it mid-turn.',
+      next: 'Show me'
+    },
+    {
+      title: 'Play a card',
+      text: 'You hold a <b>Summon</b>. It catches a coin turning <b>clockwise ↻</b> and pins it face-up. ' +
+            'Take the card, then tap the spinning coin.',
+      interactive: true
+    },
+    {
+      title: 'Both face-up',
+      text: 'Two coins, two points. That is the whole game — the rest is betting candy on whether ' +
+            'your coins will beat everyone else&rsquo;s.',
+      next: 'Deal me in'
+    }
+  ];
+
   function startTutorial() {
-    tut = { step: 0, state: new Q.QState(2), waiting: null };
-    tut.state.x(0);            // coin 1 face-up
-    tut.state.h(1);            // coin 2 spinning clockwise
+    tut = { step: 0, state: new Q.QState(2), armed: false };
+    tut.state.x(0);
+    tut.state.h(1);
     show($('#tutorial'));
     renderTutorial();
     $('#tut-quit').onclick = function () { hide($('#tutorial')); tut = null; };
   }
 
-  var TUT_STEPS = [
-    {
-      title: 'The coins',
-      text: 'Two cursed coins. The left one landed <b>face-up</b> — that is a point in your pocket. ' +
-            'The right one is still <b>spinning</b>: it is a coin flip, worth half a point on average.',
-      next: 'Go on'
-    },
-    {
-      title: 'Your job',
-      text: 'You want coins face-up when the spinning stops. A spinning coin is not bad luck — it is an ' +
-            '<b>opportunity</b>, because the right card can catch it.',
-      next: 'Show me'
-    },
-    {
-      title: 'Play a card',
-      text: 'You are holding a <b>Summon</b> 🕯️. It catches a coin spinning <b>clockwise ↻</b> and locks it face-up. ' +
-            'Tap Summon, then tap the spinning coin.',
-      interactive: true
-    },
-    {
-      title: 'Both face-up',
-      text: 'Two coins, two points. That is the whole game — plus betting candy on whether your coins ' +
-            'will beat everyone else&#39;s.',
-      next: 'Let me play'
-    }
-  ];
-
   function renderTutorial() {
     var step = TUT_STEPS[tut.step];
+    $('#tut-step').textContent = 'Step ' + (tut.step + 1) + ' of ' + TUT_STEPS.length;
     $('#tut-title').textContent = step.title;
     $('#tut-text').innerHTML = step.text;
 
     var row = $('#tut-coins');
     row.innerHTML = '';
     for (var i = 0; i < 2; i++) {
-      var info = Q.readCoin(tut.state, i);
-      var slot = el('button', 'coin-slot' + (step.interactive && tut.armed ? ' pickable' : ''));
-      slot.type = 'button';
-      slot.disabled = !(step.interactive && tut.armed);
-      var coin = el('div', 'coin');
-      coin.dataset.kind = info.kind;
-      var d3 = el('div', 'coin-3d');
-      var f = el('div', 'coin-face coin-front'); f.innerHTML = SVG_PUMPKIN;
-      var b = el('div', 'coin-face coin-back'); b.innerHTML = SVG_SKULL;
-      d3.appendChild(el('div', 'coin-edge')); d3.appendChild(f); d3.appendChild(b);
-      coin.appendChild(d3);
-      var meta = el('div', 'coin-meta');
-      meta.appendChild(el('span', 'coin-tag ' + tagClass(info.kind, null), tagText(info.kind, null, i)));
-      slot.appendChild(coin); slot.appendChild(meta);
       (function (idx) {
+        var info = Q.readCoin(tut.state, idx);
+        var slot = el('button', 'coin-slot' + (step.interactive && tut.armed ? ' pickable' : ''));
+        slot.type = 'button';
+        slot.disabled = !(step.interactive && tut.armed);
+
+        var shell = el('div', 'coin-shell');
+        var coin = el('div', 'coin');
+        coin.dataset.kind = info.kind;
+        var d3 = el('div', 'coin-3d');
+        var edge = el('div', 'coin-edge');
+        var f = el('div', 'coin-face coin-front'); f.innerHTML = Art.coinFace();
+        var b = el('div', 'coin-face coin-back'); b.innerHTML = Art.coinSkull();
+        d3.appendChild(edge); d3.appendChild(f); d3.appendChild(b);
+        coin.appendChild(d3); shell.appendChild(coin);
+
+        var meta = el('div', 'coin-meta');
+        meta.appendChild(el('span', 'coin-tag ' + tagClass(info.kind, null), tagText(info.kind, null)));
+        slot.appendChild(shell); slot.appendChild(meta);
+
         slot.onclick = function () {
-          if (idx !== 1) { $('#tut-text').innerHTML = 'That one is already face-up. Try the <b>spinning</b> coin.'; return; }
+          if (idx !== 1) {
+            $('#tut-text').innerHTML = 'That one is already face-up. Try the <b>spinning</b> coin.';
+            return;
+          }
           tut.state.zh(1);
           tut.armed = false;
           tut.step = 3;
+          Sound.cast();
           renderTutorial();
+          setTimeout(function () { Sound.coin(true); }, 320);
         };
+        row.appendChild(slot);
       })(i);
-      row.appendChild(slot);
     }
 
     var hand = $('#tut-hand');
     hand.innerHTML = '';
     if (step.interactive) {
-      var btn = el('button', 'card' + (tut.armed ? ' selected' : ''));
-      btn.type = 'button';
-      btn.innerHTML = '<span class="card-glyph">🕯️</span><span class="card-name">Summon</span>' +
-        '<span class="card-blurb">Catches a clockwise spin face-up.</span>';
-      btn.onclick = function () { tut.armed = !tut.armed; renderTutorial(); };
-      hand.appendChild(btn);
+      hand.appendChild(buildCard('SUMMON', 1, {
+        selected: tut.armed, static: true,
+        onPick: function () { tut.armed = !tut.armed; if (tut.armed) Sound.card(); renderTutorial(); }
+      }));
     }
 
     var next = $('#tut-next');
@@ -861,32 +1009,23 @@
     };
   }
 
-  /* ------------------------------------------------------------------ *
-   * Atmosphere
-   * ------------------------------------------------------------------ */
+  /* ----------------------------------------------------------------- boot -- */
 
-  function spawnEmbers() {
-    var box = $('#embers');
-    if (!box || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-    for (var i = 0; i < 18; i++) {
-      var e = el('div', 'ember');
-      e.style.left = (Math.random() * 100) + 'vw';
-      e.style.animationDuration = (9 + Math.random() * 11) + 's';
-      e.style.animationDelay = (-Math.random() * 20) + 's';
-      e.style.setProperty('--drift', (Math.random() * 90 - 45) + 'px');
-      e.style.opacity = String(0.3 + Math.random() * 0.5);
-      box.appendChild(e);
-    }
+  var SPEAKER_ON = '<svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M19 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
+  var SPEAKER_OFF = '<svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16 9.5l5 5m0-5l-5 5" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>';
+
+  function paintSoundBtn() {
+    var b = $('#btn-sound');
+    b.innerHTML = Sound.isOn() ? SPEAKER_ON : SPEAKER_OFF;
+    b.setAttribute('aria-pressed', Sound.isOn() ? 'true' : 'false');
+    b.title = Sound.isOn() ? 'Sound on' : 'Sound off';
   }
 
-  /* ------------------------------------------------------------------ *
-   * Boot
-   * ------------------------------------------------------------------ */
-
   function boot() {
-    spawnEmbers();
     initSetup();
+    paintSoundBtn();
 
+    $('#btn-sound').onclick = function () { Sound.toggle(); paintSoundBtn(); };
     $('#btn-nerd').onclick = function () {
       nerd = !nerd;
       store('nerd', nerd ? '1' : '0');
@@ -896,19 +1035,15 @@
     $('#rules-close').onclick = function () { hide($('#rules')); };
     $('#peek-close').onclick = closePeek;
 
-    window.addEventListener('resize', function () { requestAnimationFrame(drawChains); });
+    global.addEventListener('resize', function () {
+      if (game) render(); else requestAnimationFrame(drawChains);
+    });
     document.addEventListener('keydown', function (ev) {
       if (ev.key !== 'Escape') return;
       ['#peek', '#rules', '#bank'].forEach(function (s) { hide($(s)); });
     });
-
-    if (store('tutorial') !== '1') {
-      // First visit: nudge, don't hijack.
-      $('#btn-tutorial').classList.add('nudge');
-    }
   }
 
-  // Exposed so the self-checks (and a curious console) can drive the table.
   global.UI = { boot: boot, sync: sync, render: render, get game() { return game; } };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);

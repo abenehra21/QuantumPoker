@@ -223,7 +223,7 @@
       return {
         seat: i,
         name: p.name,
-        avatar: p.avatar,
+        sigil: p.sigil,
         points: stashValue(STARTING_STASH),
         startPoints: stashValue(STARTING_STASH),
         bet: 0, committed: 0,

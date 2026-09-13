@@ -315,7 +315,7 @@
       var rng = Q.mulberry32(seed * 977);
       var nP = 2 + Math.floor(rng() * 4);
       var players = [];
-      for (var i = 0; i < nP; i++) players.push({ name: 'P' + i, avatar: '🎃' });
+      for (var i = 0; i < nP; i++) players.push({ name: 'P' + i, sigil: 'moon' });
       var g = new E.Game({ players: players, seed: seed });
       var expect = START * nP, safety = 0;
       do {
