@@ -139,6 +139,41 @@
   </div>
 </div>
 
+<div class="overlay film" id="film" hidden>
+  <div class="film-frame">
+    <div class="film-top">
+      <span class="eyebrow">How to play</span>
+      <h2 class="film-chapter" id="film-chapter">The goal</h2>
+    </div>
+
+    <div class="film-stage" id="film-stage">
+      <svg class="film-chain" id="film-chain" aria-hidden="true"></svg>
+      <div class="film-score" id="film-score" hidden></div>
+      <div class="coin-row film-coins" id="film-coins"></div>
+      <div class="hand-strip film-cards" id="film-cards"></div>
+      <div class="pot film-pot" id="film-pot" hidden></div>
+    </div>
+
+    <p class="film-caption" id="film-caption" role="status" aria-live="polite"></p>
+
+    <div class="film-transport">
+      <button class="icon-btn film-play" id="film-play" type="button" aria-label="Play"></button>
+      <div class="film-scrub" id="film-scrub" role="slider" tabindex="0"
+           aria-label="Scrub the tutorial" aria-valuemin="0" aria-valuemax="80" aria-valuenow="0">
+        <div class="film-track"><div class="film-fill" id="film-fill"></div></div>
+        <div class="film-marks" id="film-marks"></div>
+      </div>
+      <span class="film-time" id="film-time">0:00 / 1:20</span>
+      <button class="btn ghost film-skip" id="film-skip" type="button">Skip</button>
+    </div>
+
+    <div class="film-end" id="film-end" hidden>
+      <button class="btn" id="film-practice" type="button">Play a practice hand</button>
+      <button class="btn primary" id="film-deal" type="button">Deal me in</button>
+    </div>
+  </div>
+</div>
+
 <div class="overlay" id="tutorial" hidden>
   <div class="sheet wide">
     <p class="eyebrow" id="tut-step">One of four</p>
@@ -159,6 +194,7 @@
 <script src="js/engine.js"></script>
 <script src="js/art.js"></script>
 <script src="js/sound.js"></script>
+<script src="js/tutorial.js"></script>
 <script src="js/ui.js"></script>
 <script src="js/tests.js"></script>
 </body>

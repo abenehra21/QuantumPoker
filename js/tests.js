@@ -336,6 +336,74 @@
     ok('the bots hit all-ins (' + allIns + ') and split pots (' + splits + ')', allIns > 0 && splits > 0);
   })();
 
+  /* ---- 9. the tutorial film ---- */
+
+  group('The how-to-play film');
+
+  (function () {
+    var F = global.Film;
+    var cues = F.cues, i;
+
+    var sorted = true;
+    for (i = 1; i < cues.length; i++) if (cues[i].t < cues[i - 1].t) sorted = false;
+    ok('cues are in time order', sorted);
+
+    ok('every cue lands inside the running time',
+      cues.every(function (c) { return c.t >= 0 && c.t <= F.duration; }));
+
+    ok('every sound cue names a real sound',
+      cues.every(function (c) { return !c.sfx || typeof global.Sound[c.sfx] === 'function'; }),
+      cues.filter(function (c) { return c.sfx && !global.Sound[c.sfx]; })
+          .map(function (c) { return c.sfx; }).join(','));
+
+    var KINDS = ['up', 'down', 'cw', 'ccw', 'murky', 'hidden'];
+    var badCoin = null;
+    cues.forEach(function (c) {
+      (c.set.coins || []).forEach(function (spec) {
+        if (KINDS.indexOf(spec.k) === -1) badCoin = spec.k;
+      });
+    });
+    ok('every coin in the script is a state the game can show', badCoin === null, String(badCoin));
+
+    var badCard = null;
+    cues.forEach(function (c) {
+      (c.set.cards || []).forEach(function (id) { if (!E.CARDS[id]) badCard = id; });
+      if (c.set.cardSpot && !E.CARDS[c.set.cardSpot]) badCard = c.set.cardSpot;
+    });
+    ok('every card in the script is a card in the deck', badCard === null, String(badCard));
+
+    // Walk the whole film a tenth of a second at a time: no gaps, no crashes.
+    var silent = 0, noChapter = 0, worst = null, t;
+    for (t = 0.5; t <= F.duration; t += 0.1) {
+      var st = F.stateAt(t);
+      if (!st.caption) { silent++; worst = worst === null ? t : worst; }
+      if (!st.chapter) noChapter++;
+    }
+    ok('a caption is on screen at every moment of the film', silent === 0,
+      silent + ' silent frames, first at ' + (worst === null ? '-' : worst.toFixed(1)) + 's');
+    ok('every moment belongs to a chapter', noChapter === 0, noChapter + ' orphan frames');
+
+    ok('it runs between one and two minutes', F.duration > 60 && F.duration < 120,
+      F.duration + 's');
+    ok('it is split into chapters you can jump between', F.chapters.length >= 5,
+      F.chapters.length + ' chapters');
+
+    var ending = F.stateAt(F.duration);
+    ok('it ends on the pay-off — five coins face-up',
+      ending.coins.length === 5 && ending.coins.every(function (c) { return c.k === 'up'; }));
+
+    // The spotlight must never point at a coin that is not on the stage.
+    var badSpot = false;
+    for (t = 0; t <= F.duration; t += 0.1) {
+      var s2 = F.stateAt(t);
+      if (s2.spot && s2.spot.some(function (i2) { return i2 >= s2.coins.length; })) badSpot = true;
+      if (s2.chains && s2.chains.some(function (p) {
+        return p[0] >= s2.coins.length || p[1] >= s2.coins.length;
+      })) badSpot = true;
+    }
+    ok('spotlights and chains only ever point at coins that are on screen', !badSpot);
+  })();
+
   /* ---- report ---- */
 
   var head = failed === 0

@@ -74,7 +74,7 @@
       renderSeats();
     };
     $('#btn-start').onclick = startGame;
-    $('#btn-tutorial').onclick = startTutorial;
+    $('#btn-tutorial').onclick = openFilm;
     $('#btn-rules-setup').onclick = openRules;
   }
 
@@ -894,13 +894,42 @@
 
       '<div><h3>Underneath</h3><p>The coins are qubits and the cards are quantum gates — Flip is X, ' +
       'Haunt is Hadamard, Summon is ZH, Bind is CNOT. Spinning is superposition; chained is ' +
-      'entanglement. Press <b>Ψ</b> to see the real states. You need none of it to win.</p></div>';
+      'entanglement. Press <b>Ψ</b> to see the real states. You need none of it to win.</p></div>' +
+
+      '<div><h3>Rather be shown?</h3><p id="rules-watch-line">' +
+      'There is a minute-and-a-half walk-through of all of this.</p></div>';
+
+    var watch = el('button', 'btn');
+    watch.type = 'button';
+    watch.textContent = 'Watch the rules';
+    watch.onclick = function () { hide($('#rules')); openFilm(); };
+    $('#rules-watch-line').appendChild(document.createElement('br'));
+    $('#rules-watch-line').appendChild(watch);
 
     show($('#rules'));
     $('#rules-close').onclick = function () { hide($('#rules')); };
   }
 
-  /* ------------------------------------------------------------- tutorial -- */
+  /* ----------------------------------------------------------------- film -- */
+
+  /**
+   * The rules, as a short film. Watching is the default way in; the hands-on
+   * practice hand is offered at the end for anyone who wants to try it before
+   * sitting down with other people's candy.
+   */
+  function openFilm() {
+    var midGame = !!game;
+    global.Film.open({
+      onDone: function (next) {
+        store('tutorial', '1');
+        if (midGame) return;              // already at a table; just go back to it
+        if (next === 'practice') startTutorial();
+        else if (next === true) startGame();
+      }
+    });
+  }
+
+  /* ------------------------------------------------------------- practice -- */
 
   var tut = null;
 
@@ -1002,6 +1031,7 @@
         hide($('#tutorial'));
         tut = null;
         store('tutorial', '1');
+        startGame();
         return;
       }
       tut.step++;
@@ -1033,6 +1063,7 @@
     };
     $('#btn-rules').onclick = openRules;
     $('#rules-close').onclick = function () { hide($('#rules')); };
+    global.Film.boot();
     $('#peek-close').onclick = closePeek;
 
     global.addEventListener('resize', function () {

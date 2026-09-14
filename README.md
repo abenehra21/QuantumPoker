@@ -29,8 +29,16 @@ and a curtain covers the screen between turns so nobody sees a hand they shouldn
 There is nothing to sign into and no IBM Quantum account needed; the quantum mechanics
 is simulated locally in about sixty lines of JavaScript.
 
-First time? Hit **60-second tutorial** on the title screen. It is two coins, two cards,
-and no jargon.
+First time? Hit **Never played** on the title screen. A ninety-second walk-through
+plays: the coins land, the cards come out one at a time and do their thing, candy goes
+into the pot, and the whole game is explained without a single ket. It can be paused,
+scrubbed, and jumped by chapter, and it ends by offering either a practice hand or a
+real one. It is also on the **?** menu at the table, for whoever wanders up halfway
+through the evening.
+
+It is not a video file. Every frame is the game's own art animated live, so it stays
+sharp on a projector, loads instantly, and its captions are real selectable text rather
+than burned-in pixels.
 
 > Playing on a laptop with a projector works well for a crowd; playing on one phone
 > passed around the table works better for four friends and a bowl of sweets.
@@ -152,8 +160,9 @@ js/quantum.js       state-vector simulator + board dealing
 js/engine.js        candy, betting rounds, side pots, showdown
 js/art.js           every mark on the table, drawn as SVG
 js/sound.js         sound effects, synthesised — no audio files
+js/tutorial.js      the how-to-play film: a cue timeline, not a video
 js/ui.js            screens and interaction
-js/tests.js         43 self-checks — open index.html?test
+js/tests.js         54 self-checks — open index.html?test
 docs/coins.svg      the illustration at the top of this file
 Python/             the original Qiskit implementation (see below)
 ```
@@ -168,7 +177,12 @@ and no audio file in the repository.
 Open **[index.html?test](index.html?test)** in a browser. It verifies the gate algebra
 against the coin metaphor, that probability is conserved across ten thousand random
 gates, that chained coins really do always land together, that side pots split correctly,
-and that 60 bot-played games conserve every last piece of candy.
+that 4 000 random finishes pay out in candy the table actually owns, and that 60
+bot-played games conserve every last piece of it.
+
+The tutorial film is checked too — that its cues are in order, that every card and coin
+it shows is one the game really has, that a caption is on screen at every moment of its
+running time, and that it ends on the pay-off.
 
 ---
 
@@ -239,6 +253,7 @@ The rules are the same game; the framing is not.
 - The Matplotlib window became a felt table under a candle: seats that orbit as the
   turn passes, cards that lean toward the cursor, coins that drop and ring when they
   land, and a pot that counts up rather than jumping.
+- The rules got a ninety-second film instead of a wall of text.
 
 ---
 

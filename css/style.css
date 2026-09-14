@@ -709,6 +709,113 @@ input[type="range"] {
 .rules-mini .flame { fill: var(--ember); }
 .rules-mini .flame-core { fill: var(--candle-hot); }
 
+/* ------------------------------------------------------------------ film -- */
+
+.film { background: rgba(3,2,1,.95); padding: .8rem; }
+
+.film-frame {
+  width: min(720px, 100%);
+  display: grid; gap: .7rem;
+  padding: clamp(1rem, 3.5vw, 1.6rem);
+  border-radius: var(--r-panel);
+  background:
+    radial-gradient(90% 55% at 50% 0%, rgba(255,200,120,.07), transparent 62%),
+    linear-gradient(180deg, #1d1309, #0e0906);
+  border: 1px solid rgba(255,205,140,.16);
+  box-shadow: var(--shadow-deep);
+}
+
+.film-top { text-align: center; display: grid; gap: .1rem; }
+.film-chapter {
+  margin: 0; font-size: clamp(1.2rem, 4.5vw, 1.6rem); color: var(--candle);
+  min-height: 1.2em;
+}
+
+/* the picture */
+.film-stage {
+  position: relative;
+  min-height: clamp(190px, 34vh, 250px);
+  display: grid; gap: .5rem; align-content: center; justify-items: center;
+  padding: 1.6rem .5rem .8rem;
+  border-radius: var(--r-panel);
+  background:
+    radial-gradient(58% 80% at 50% 4%, rgba(255,205,130,.12), transparent 68%),
+    radial-gradient(130% 120% at 50% 45%, var(--felt-lit), var(--felt) 58%, var(--felt-edge));
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,.55), inset 0 3px 16px rgba(0,0,0,.6);
+  overflow: hidden;
+}
+.film-chain { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+
+.film-coins { --coin: clamp(50px, 11vw, 74px); }
+.film-coin { transition: opacity .4s ease, filter .4s ease, transform .4s ease; }
+.film-coin.dimmed, .film-card.dimmed { opacity: .22; filter: saturate(.4); }
+.film-coin.lit { transform: translateY(-4px); }
+.film-card { transition: opacity .4s ease, filter .4s ease, transform .4s ease; cursor: default; }
+.film-card.lit { transform: translateY(-9px) scale(1.04); box-shadow: 0 18px 30px rgba(0,0,0,.6); }
+.film-cards { --card-w: 92px; }
+.film-cards .card { width: 92px; min-height: 116px; }
+.film-cards .card-art { height: 44px; }
+
+.film-score { display: grid; justify-items: center; gap: 0; }
+.film-score-n {
+  font-family: "Barlow Condensed", sans-serif; font-weight: 700;
+  font-size: 2.6rem; line-height: 1; color: var(--candle);
+  text-shadow: 0 0 26px rgba(232,163,61,.5);
+}
+.film-score-l {
+  font-family: "Barlow Condensed", sans-serif; font-size: .62rem;
+  letter-spacing: .22em; text-transform: uppercase; color: var(--bone-faint);
+}
+.film-pot { gap: 0; }
+
+/* the caption track */
+.film-caption {
+  margin: 0; min-height: 3.1em;
+  text-align: center; line-height: 1.5;
+  font-size: clamp(.95rem, 3.3vw, 1.1rem);
+  max-width: 52ch; justify-self: center;
+  text-wrap: balance;
+}
+.film-caption.flash { animation: capIn .34s ease; }
+@keyframes capIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+
+/* transport */
+.film-transport { display: flex; align-items: center; gap: .6rem; }
+.film-play { flex: none; width: 38px; height: 38px; color: var(--candle); }
+.film-play svg { width: 16px; height: 16px; }
+
+.film-scrub { position: relative; flex: 1; min-width: 0; padding: .7rem 0; cursor: pointer; }
+.film-scrub:focus-visible { outline: 2px solid var(--candle); outline-offset: 3px; border-radius: 3px; }
+.film-track { height: 4px; border-radius: 2px; background: rgba(255,255,255,.1); overflow: hidden; }
+.film-fill { height: 100%; background: var(--candle); box-shadow: 0 0 10px rgba(232,163,61,.6); }
+.film-marks { position: absolute; inset: 0; pointer-events: none; }
+.film-mark {
+  position: absolute; top: 50%; width: 11px; height: 11px; margin: -5.5px 0 0 -5.5px;
+  border-radius: 50%; border: 1px solid rgba(0,0,0,.7);
+  background: #6d5c42; cursor: pointer; pointer-events: auto; padding: 0;
+  transition: background .2s ease, transform .2s ease;
+}
+.film-mark:hover { transform: scale(1.25); }
+.film-mark.on { background: var(--candle-hot); box-shadow: 0 0 9px rgba(255,213,145,.8); }
+.film-mark:focus-visible { outline: 2px solid var(--candle); outline-offset: 2px; }
+
+.film-time {
+  font-family: "Barlow Condensed", sans-serif; font-size: .72rem;
+  letter-spacing: .1em; color: var(--bone-faint);
+  font-variant-numeric: tabular-nums; flex: none;
+}
+.film-skip { flex: none; padding: .45rem .8rem; font-size: .74rem; }
+
+.film-end { display: flex; gap: .5rem; justify-content: center; flex-wrap: wrap; }
+
+@media (max-width: 620px) {
+  .film-cards .card { width: 76px; min-height: 98px; }
+  .film-cards .card-art { height: 36px; }
+  .film-cards .card-blurb { display: none; }
+  .film-time { display: none; }
+  .film-stage { min-height: 175px; padding-top: 1.3rem; }
+}
+
 /* tutorial */
 .tut-row { margin: .3rem 0; }
 .tut-text { margin: 0; line-height: 1.65; min-height: 4.4em; }
