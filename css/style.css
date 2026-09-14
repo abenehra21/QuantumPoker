@@ -1,8 +1,9 @@
-/* Candy Coven
+/* Quantum Poker
  *
- * A card room at the wrong hour: oiled wood, worn green felt, one candle
- * overhead. Warmth comes from the light, never from the surfaces. Everything
- * carries grain, because nothing in a room like this is smooth.
+ * A card room at the wrong hour: oiled wood, worn green felt, one lamp
+ * overhead. Warmth comes from the light, never from the surfaces; everything
+ * carries grain, because nothing in a room like this is smooth. The only cool
+ * colour on the table is superposition, which is the point.
  */
 
 :root {
@@ -30,7 +31,8 @@
   --ember:      #c2571c;
   --oxblood:    #8e2231;
   --oxblood-lit:#c0384a;
-  --verdigris:  #63a98c;
+  --verdigris:  #63a98c;   /* entanglement */
+  --quantum:    #5cc5d8;   /* superposition */
   --bruise:     #9d6fa8;
 
   --coin-cut:   #2a1c10;
@@ -352,19 +354,17 @@ h1, h2, .street, .sheet-title, .rank, .brand {
   background: linear-gradient(180deg, #7c4a0d, #ffe5ab 26%, #c98b23 54%, #6b3c07);
   opacity: 0; transition: opacity .2s ease;
 }
-.coin[data-kind="cw"] .coin-edge, .coin[data-kind="ccw"] .coin-edge { opacity: 1; }
+.coin[data-kind="cw"] .coin-edge,
+.coin[data-kind="ccw"] .coin-edge,
+.coin[data-kind="murky"] .coin-edge { opacity: 1; }
 
 .coin[data-kind="up"]    .coin-3d { transform: rotateY(0deg); }
 .coin[data-kind="down"]  .coin-3d { transform: rotateY(180deg); }
 .coin[data-kind="hidden"] .coin-3d { transform: rotateY(180deg); }
 .coin[data-kind="cw"]    .coin-3d { animation: spin .95s linear infinite; }
 .coin[data-kind="ccw"]   .coin-3d { animation: spin .95s linear infinite reverse; }
-.coin[data-kind="murky"] .coin-3d { animation: sway 2.8s ease-in-out infinite; }
+.coin[data-kind="murky"] .coin-3d { animation: spin 2.6s linear infinite; }
 @keyframes spin { from { transform: rotateY(0deg); } to { transform: rotateY(360deg); } }
-@keyframes sway {
-  0%, 100% { transform: rotateY(-26deg) rotateZ(-2.5deg); }
-  50%      { transform: rotateY(26deg) rotateZ(2.5deg); }
-}
 
 .coin[data-kind="up"] .coin-front { box-shadow: inset 0 0 0 3px rgba(255,232,180,.6), 0 0 26px rgba(232,163,61,.45); }
 .coin[data-kind="hidden"] .coin-back {
@@ -383,9 +383,10 @@ h1, h2, .street, .sheet-title, .rank, .brand {
   white-space: nowrap;
 }
 .coin-tag.good { color: #24150a; background: var(--candle); border-color: #8a5512; }
-.coin-tag.spin { color: #dfc4e6; background: rgba(157,111,168,.26); border-color: rgba(157,111,168,.45); }
+.coin-tag.spin { color: #bfeaf2; background: rgba(92,197,216,.18); border-color: rgba(92,197,216,.45); }
 .coin-tag.link { color: #bfe6d3; background: rgba(99,169,140,.2); border-color: rgba(99,169,140,.45); }
-.coin-ket { font-size: .66rem; color: var(--bruise); font-family: Spectral, serif; }
+.coin-tag.link-opp { color: #e6cdec; background: rgba(157,111,168,.24); border-color: rgba(157,111,168,.5); }
+.coin-ket { font-size: .66rem; color: var(--quantum); font-family: Spectral, serif; }
 
 /* ---- pot ---- */
 
@@ -468,11 +469,11 @@ h1, h2, .street, .sheet-title, .rank, .brand {
 /* ---- read + prompt ---- */
 
 .read {
-  text-align: center; margin: 0; min-height: 1.2em;
-  font-size: .8rem; color: var(--bone-faint);
-  font-family: "Barlow Condensed", sans-serif; letter-spacing: .1em; text-transform: uppercase;
+  text-align: center; margin: 0; min-height: 1.3em;
+  font-size: .82rem; color: var(--bone-faint);
+  font-family: Spectral, Georgia, serif; font-style: italic;
 }
-.read .hot { color: var(--verdigris); }
+.read .hot { color: var(--verdigris); font-style: normal; }
 .prompt {
   text-align: center; margin: 0 auto; min-height: 2.2em;
   max-width: 44ch; padding: 0 .5rem;
@@ -495,11 +496,14 @@ h1, h2, .street, .sheet-title, .rank, .brand {
 }
 
 .ledger {
-  font-size: .64rem; color: var(--bone-faint);
-  text-align: center; min-height: 1em;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  display: grid; gap: .05rem;
+  min-height: 2.4em; align-content: start;
+  font-family: Spectral, Georgia, serif;
+  font-size: .7rem; letter-spacing: 0; text-transform: none;
+  color: var(--bone-faint);
 }
-.ledger b { color: var(--bone-dim); font-weight: 600; }
+.ledger-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: .55; }
+.ledger-line.fresh { opacity: 1; color: var(--bone-dim); }
 
 .tray-main { display: grid; gap: .5rem; }
 .row { display: flex; gap: .45rem; }
@@ -555,6 +559,30 @@ input[type="range"] {
 .card-art g[stroke-width] { stroke: var(--card-ink); }
 .card-blurb { font-family: Spectral, serif; font-size: .62rem; line-height: 1.3; color: #5a4830; }
 .card-gate { font-size: .54rem; color: #8a5512; letter-spacing: .12em; }
+/* The Observer. One in the deck, and not in most decks — it should look like
+   something you were lucky to be dealt. */
+.card.rare {
+  background:
+    radial-gradient(120% 90% at 50% 0%, #fdf6e2, #f0e4c2 58%, #d8c79c);
+  border-color: #b08b3a;
+  box-shadow: 0 8px 18px rgba(0,0,0,.55), inset 0 0 0 1px rgba(255,255,255,.6),
+              0 0 0 2px rgba(232,163,61,.35), 0 0 26px rgba(232,163,61,.22);
+}
+.card.rare .card-name { color: #7a5310; }
+.card.rare::before {
+  content: ""; position: absolute; inset: 0; border-radius: var(--r-card);
+  pointer-events: none;
+  background: linear-gradient(115deg, transparent 38%, rgba(255,255,255,.55) 50%, transparent 62%);
+}
+.card.rare:disabled::before { display: none; }
+.rare-mark {
+  position: absolute; top: -7px; left: -7px;
+  font-family: "Barlow Condensed", sans-serif; font-size: .5rem; font-weight: 700;
+  letter-spacing: .12em; padding: .1rem .34rem; border-radius: 2px;
+  background: linear-gradient(180deg, var(--candle-hot), var(--candle));
+  color: #3a2405; border: 1px solid #8a5512;
+}
+
 .card-count {
   position: absolute; top: -6px; right: -6px;
   width: 21px; height: 21px; border-radius: 50%;
@@ -658,10 +686,10 @@ input[type="range"] {
 
 .rank { font-size: 1.05rem; color: var(--bone-dim); }
 .rank .n { color: var(--candle); font-size: 1.25rem; margin-left: .15em; }
-.rank.bloodmoon {
-  color: var(--oxblood-lit); font-size: 1.3rem;
+.rank.coherence {
+  color: var(--quantum); font-size: 1.3rem;
   animation: throb 1.15s ease-in-out infinite;
-  text-shadow: 0 0 24px rgba(192,56,74,.7);
+  text-shadow: 0 0 26px rgba(92,197,216,.75);
 }
 @keyframes throb { 0%,100% { transform: scale(1); } 50% { transform: scale(1.07); } }
 .sd-summary { margin: 0; padding-top: .6rem; border-top: 1px solid rgba(255,205,140,.12);
@@ -683,6 +711,27 @@ input[type="range"] {
 .bank-delta { font-size: 1rem; font-variant-numeric: tabular-nums; }
 .bank-delta.up { color: var(--verdigris); }
 .bank-delta.down { color: var(--oxblood-lit); }
+
+/* the Observer's result */
+.observed-row {
+  display: grid; grid-template-columns: 1fr auto auto; gap: .6rem;
+  align-items: center; text-align: left;
+  padding: .5rem 0; border-top: 1px solid rgba(255,205,140,.1);
+  --seat-ground: #17100a;
+}
+.observed-row:first-child { border-top: none; }
+.observed-row.mine .observed-who span { color: var(--candle); }
+.observed-who { display: inline-flex; align-items: center; gap: .45rem; font-family: Spectral, serif; }
+.observed-who svg { width: 16px; height: 16px; fill: var(--candle); flex: none; }
+.observed-chip { display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; }
+.observed-chip svg { width: 70%; height: 70%; }
+.observed-chip.one { background: radial-gradient(circle at 35% 26%, #ffeab6, #e8a33d 45%, #a66716 82%); color: var(--coin-cut); fill: var(--coin-cut); }
+.observed-chip.zero { background: radial-gradient(circle at 35% 26%, #3b332b, #17120e 72%); color: #6d6355; fill: #6d6355; }
+.observed-note {
+  font-family: "Barlow Condensed", sans-serif; font-size: .6rem;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--bone-faint);
+  min-width: 11ch; text-align: right;
+}
 
 /* rules */
 .rules-body { display: grid; gap: 1.1rem; line-height: 1.65; }
@@ -866,6 +915,6 @@ input[type="range"] {
   }
   .coin[data-kind="cw"] .coin-3d  { transform: rotateY(62deg); }
   .coin[data-kind="ccw"] .coin-3d { transform: rotateY(-62deg); }
-  .coin[data-kind="murky"] .coin-3d { transform: rotateY(24deg); }
+  .coin[data-kind="murky"] .coin-3d { transform: rotateY(62deg); }
   .sd-coin { opacity: 1; transform: none; }
 }

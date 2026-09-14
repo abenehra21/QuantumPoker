@@ -1,5 +1,5 @@
 /*
- * Candy Coven — tutorial.js
+ * Quantum Poker — tutorial.js
  * "How to play" as a short film: a scripted timeline of coins, cards and
  * captions, paced the way a good board-game explainer is paced.
  *
@@ -19,12 +19,13 @@
   /* ------------------------------------------------------------ vocabulary -- */
 
   function C(k, tag, cls) { return { k: k, tag: tag, cls: cls || '' }; }
-  var UP    = C('up', 'face-up', 'good');
-  var DOWN  = C('down', 'dead', '');
+  var UP    = C('up', '1', 'good');
+  var DOWN  = C('down', '0', '');
   var CW    = C('cw', '↻ 50%', 'spin');
   var CCW   = C('ccw', '↺ 50%', 'spin');
   var HID   = C('hidden', '', '');
-  function LINK(n) { return C('murky', '⛓ ' + n, 'link'); }
+  function LINK(n) { return C('murky', 'linked ' + n, 'link'); }
+  function OPPOSED(n) { return C('murky', 'opposed ' + n, 'link-opp'); }
 
   /* ---------------------------------------------------------------- script -- */
 
@@ -32,11 +33,11 @@
     /* ---- 1. what you are trying to do ---- */
     { t: 0.0, set: {
       chapter: 'The goal',
-      caption: 'Five cursed coins are dealt to the middle of the table.',
+      caption: 'Five qubits are dealt to the middle of the table, face down.',
       coins: [HID, HID, HID, HID, HID], cards: [], pot: null, score: null, chains: []
     }, sfx: 'card' },
 
-    { t: 2.2, set: { caption: 'At the end of the hand, every one of them lands.' } },
+    { t: 2.2, set: { caption: 'At the end of the hand, every one of them settles — on a 1 or a 0.' } },
     { t: 3.4, set: { coins: [UP, HID, HID, HID, HID] }, sfx: 'coin' },
     { t: 3.9, set: { coins: [UP, DOWN, HID, HID, HID] }, sfx: 'thud' },
     { t: 4.4, set: { coins: [UP, DOWN, UP, HID, HID] }, sfx: 'coin' },
@@ -44,7 +45,7 @@
     { t: 5.4, set: { coins: [UP, DOWN, UP, UP, DOWN] }, sfx: 'thud' },
 
     { t: 6.4, set: {
-      caption: 'Every coin showing its face is one point.',
+      caption: 'Every coin showing a 1 is one point.',
       spot: [0, 2, 3], score: 3
     } },
     { t: 8.6, set: { caption: 'Most points takes the candy. That is the whole game.', spot: null } },
@@ -52,15 +53,15 @@
     /* ---- 2. reading a coin ---- */
     { t: 11.2, set: {
       chapter: 'Reading a coin', score: null,
-      caption: 'Three things can be true of a coin. This one is settled, face-up.',
+      caption: 'Three things can be true of a coin. This one has settled on 1.',
       coins: [UP, DOWN, CW], spot: [0]
     }, sfx: 'card' },
 
-    { t: 14.0, set: { caption: 'This one is dead. Worth nothing — unless you turn it over.', spot: [1] } },
-    { t: 16.8, set: { caption: 'And this one is still spinning. It has not decided yet: even money.', spot: [2] } },
+    { t: 14.0, set: { caption: 'This one settled on 0. Worth nothing — unless you turn it.', spot: [1] } },
+    { t: 16.8, set: { caption: 'And this one is still spinning: a qubit in superposition, even money.', spot: [2] } },
 
     { t: 20.0, set: {
-      caption: 'Which way it spins matters. These are two different coins.',
+      caption: 'Which way it spins matters. These are two different qubits.',
       coins: [CW, CCW], spot: null
     }, sfx: 'card' },
     { t: 22.8, set: { caption: 'Clockwise and counter-clockwise take different cards to catch.' } },
@@ -68,24 +69,21 @@
     /* ---- 3. the cards ---- */
     { t: 25.6, set: {
       chapter: 'Your cards',
-      caption: 'You are dealt three cards. There are four kinds.',
+      caption: 'You are dealt three cards. There are four you will see often.',
       coins: [], cards: ['FLIP', 'HAUNT', 'SUMMON', 'BIND'], spot: null
     }, sfx: 'card' },
 
-    { t: 28.4, set: {
-      caption: 'Flip turns a resting coin over.',
-      coins: [DOWN], cardSpot: 'FLIP'
-    } },
+    { t: 28.4, set: { caption: 'Flip turns a settled coin over.', coins: [DOWN], cardSpot: 'FLIP' } },
     { t: 30.4, set: { coins: [UP] }, sfx: 'cast' },
 
     { t: 32.4, set: {
-      caption: 'Haunt sets a resting coin spinning — or stops one that already is.',
+      caption: 'Haunt sets a settled coin spinning — or stops one that already is.',
       coins: [DOWN], cardSpot: 'HAUNT'
     } },
     { t: 34.4, set: { coins: [CW] }, sfx: 'cast' },
 
     { t: 36.4, set: {
-      caption: 'Summon catches a clockwise spin and pins it face-up. Your best card.',
+      caption: 'Summon catches a clockwise spin and pins it on 1. Your best card.',
       coins: [CW], cardSpot: 'SUMMON'
     } },
     { t: 38.6, set: { coins: [UP] }, sfx: 'coin' },
@@ -93,54 +91,74 @@
     { t: 40.6, set: { caption: 'But Summon does not undo itself.' } },
     { t: 42.2, set: { coins: [CCW], caption: 'Play it twice on the same coin and the point is gone.' }, sfx: 'thud' },
 
-    /* ---- 4. chains ---- */
+    /* ---- 4. entanglement ---- */
     { t: 45.4, set: {
-      chapter: 'Chains',
-      caption: 'Bind chains two coins together.',
+      chapter: 'Links',
+      caption: 'Bind entangles two coins.',
       coins: [CW, DOWN], cards: ['BIND'], cardSpot: 'BIND', spot: null
     }, sfx: 'card' },
 
     { t: 47.6, set: {
       coins: [LINK(2), LINK(1)], chains: [[0, 1]],
-      caption: 'Chained coins always land the same way up.'
+      caption: 'Linked coins always settle the same way.'
     }, sfx: 'cast' },
 
     { t: 50.4, set: { caption: 'So fix one of them, and you have fixed both.', cards: ['SUMMON'], cardSpot: 'SUMMON' } },
     { t: 52.6, set: { coins: [UP, UP], chains: [], caption: 'One card. Two points.' }, sfx: 'coin' },
 
-    /* ---- 5. the betting ---- */
-    { t: 55.4, set: {
+    /* ---- 5. the rare one ---- */
+    { t: 55.8, set: {
+      chapter: 'The Observer',
+      caption: 'And then there is the Observer. One exists. Most hands do not contain it.',
+      coins: [], cards: ['OBSERVER'], cardSpot: 'OBSERVER', chains: []
+    }, sfx: 'card' },
+
+    { t: 59.0, set: {
+      caption: 'It does not change a coin. It measures one — on every board at the table at once.',
+      coins: [UP, CW, CW]
+    } },
+    { t: 61.6, set: { caption: 'Say you have already pinned your coin on 1, and the others have not.', spot: [0] } },
+    { t: 64.0, set: { caption: 'Play the Observer, and every copy of that coin collapses where it stands.', spot: null }, sfx: 'observe' },
+    { t: 66.2, set: { coins: [UP, DOWN, UP] } },
+    { t: 67.4, set: {
+      caption: 'You keep your point. Everyone still spinning gets a toss — and no way back.',
+      spot: [0]
+    } },
+    { t: 70.4, set: { caption: 'Superposition gone, links broken, the value fixed. It is the strongest card in the deck.', spot: null } },
+
+    /* ---- 6. the betting ---- */
+    { t: 74.0, set: {
       chapter: 'The betting',
       caption: 'You bet candy before a single coin is turned over.',
       coins: [HID, HID, HID, HID, HID], cards: [], cardSpot: null, pot: 15
     }, sfx: 'chip' },
 
-    { t: 57.8, set: { coins: [CW, DOWN, UP, HID, HID], pot: 40, caption: 'Three coins come down. Bet again.' }, sfx: 'chip' },
-    { t: 60.2, set: { coins: [CW, DOWN, UP, CCW, HID], pot: 75, caption: 'A fourth. Bet again.' }, sfx: 'chip' },
-    { t: 62.4, set: { coins: [CW, DOWN, UP, CCW, CW], pot: 120, caption: 'A fifth, and the last round of betting.' }, sfx: 'chip' },
-    { t: 65.0, set: { caption: 'Only then does everybody play their cards.' } },
+    { t: 76.4, set: { coins: [CW, DOWN, UP, HID, HID], pot: 40, caption: 'Three coins come down. Bet again.' }, sfx: 'chip' },
+    { t: 78.8, set: { coins: [CW, DOWN, UP, CCW, HID], pot: 75, caption: 'A fourth. Bet again.' }, sfx: 'chip' },
+    { t: 81.0, set: { coins: [CW, DOWN, UP, CCW, CW], pot: 120, caption: 'A fifth, and the last round of betting.' }, sfx: 'chip' },
+    { t: 83.6, set: { caption: 'Only then does everybody play their cards.' } },
 
-    /* ---- 6. the pay-off ---- */
-    { t: 67.6, set: {
-      chapter: 'The showdown', pot: 120,
-      caption: 'The coins land. Count the faces.',
+    /* ---- 7. the pay-off ---- */
+    { t: 86.2, set: {
+      chapter: 'The collapse', pot: 120,
+      caption: 'The coins settle. Count the ones.',
       coins: [HID, HID, HID, HID, HID]
     } },
-    { t: 69.0, set: { coins: [UP, HID, HID, HID, HID] }, sfx: 'coin' },
-    { t: 69.5, set: { coins: [UP, UP, HID, HID, HID] }, sfx: 'coin' },
-    { t: 70.0, set: { coins: [UP, UP, UP, HID, HID] }, sfx: 'coin' },
-    { t: 70.5, set: { coins: [UP, UP, UP, UP, HID] }, sfx: 'coin' },
-    { t: 71.0, set: { coins: [UP, UP, UP, UP, UP], score: 5, caption: 'Five faces. A Blood Moon — and the whole pot.' }, sfx: 'bloodMoon' },
+    { t: 87.6, set: { coins: [UP, HID, HID, HID, HID] }, sfx: 'coin' },
+    { t: 88.1, set: { coins: [UP, UP, HID, HID, HID] }, sfx: 'coin' },
+    { t: 88.6, set: { coins: [UP, UP, UP, HID, HID] }, sfx: 'coin' },
+    { t: 89.1, set: { coins: [UP, UP, UP, UP, HID] }, sfx: 'coin' },
+    { t: 89.6, set: { coins: [UP, UP, UP, UP, UP], score: 5, caption: 'Five ones. Coherence — and the whole pot.' }, sfx: 'coherence' },
 
-    { t: 74.4, set: {
+    { t: 93.0, set: {
       chapter: 'That is all of it',
-      caption: 'Land coins face-up. Bet on your odds. Take the candy.',
+      caption: 'Settle coins on 1. Bet on your odds. Take the candy.',
       spot: null, score: null, pot: null, cards: [], cardSpot: null
     } },
-    { t: 77.0, set: { caption: 'Nobody at the table needs to know they are qubits.' } }
+    { t: 95.6, set: { caption: 'The quantum mechanics is real. Knowing that is optional.' } }
   ];
 
-  var DURATION = 80.5;
+  var DURATION = 99.0;
 
   var CHAPTERS = (function () {
     var out = [], seen = null;
@@ -188,8 +206,8 @@
     var coin = el('div', 'coin');
     var d3 = el('div', 'coin-3d');
     var edge = el('div', 'coin-edge');
-    var front = el('div', 'coin-face coin-front'); front.innerHTML = Art.coinFace();
-    var back = el('div', 'coin-face coin-back'); back.innerHTML = Art.coinSkull();
+    var front = el('div', 'coin-face coin-front'); front.innerHTML = Art.coinOne();
+    var back = el('div', 'coin-face coin-back'); back.innerHTML = Art.coinZero();
     d3.appendChild(edge); d3.appendChild(front); d3.appendChild(back);
     coin.appendChild(d3); shell.appendChild(coin);
     var meta = el('div', 'coin-meta');
@@ -241,12 +259,17 @@
       s.cards.forEach(function (id) {
         var card = global.Engine.CARDS[id];
         var node = el('div', 'card film-card' +
+          (card.rare ? ' rare' : '') +
           (s.cardSpot && s.cardSpot !== id ? ' dimmed' : '') +
           (s.cardSpot === id ? ' lit' : ''));
         node.innerHTML =
           '<span class="card-name">' + card.name + '</span>' +
           Art.cardArt(id) +
           '<span class="card-blurb">' + card.blurb + '</span>';
+        if (card.rare) {
+          var mark = el('span', 'rare-mark', 'rare');
+          node.appendChild(mark);
+        }
         hand.appendChild(node);
       });
     }

@@ -1,5 +1,5 @@
 /*
- * Candy Coven — Quantum Poker
+ * Quantum Poker
  * engine.js : the rules. Candy, betting rounds, side pots, showdown.
  *
  * No DOM in here. The whole game can be driven from a script, which is how
@@ -88,23 +88,33 @@
   var CARDS = {
     FLIP: {
       id: 'FLIP', name: 'Flip', gate: 'X', arity: 1,
-      blurb: 'Turns a resting coin over. A spinning coin shrugs it off.'
+      blurb: 'Turns a settled coin over. A spinning coin shrugs it off.'
     },
     HAUNT: {
       id: 'HAUNT', name: 'Haunt', gate: 'H', arity: 1,
-      blurb: 'Sets a resting coin spinning — or stops one that already is.'
+      blurb: 'Sets a settled coin spinning — or stops one that already is.'
     },
     SUMMON: {
       id: 'SUMMON', name: 'Summon', gate: 'ZH', arity: 1,
-      blurb: 'Catches a clockwise spin face-up. Your best card.'
+      blurb: 'Catches a clockwise spin and pins it on 1. Your best card.'
     },
     BIND: {
       id: 'BIND', name: 'Bind', gate: 'CX', arity: 2,
-      blurb: 'Chains two coins so they land together — or snaps a chain.'
+      blurb: 'Links two coins so they settle together — or breaks a link.'
+    },
+    OBSERVER: {
+      id: 'OBSERVER', name: 'Observer', gate: 'measure', arity: 1, rare: true,
+      blurb: 'Collapses one coin on every board at the table. Including yours.'
     }
   };
 
-  var CARD_IDS = ['FLIP', 'HAUNT', 'SUMMON', 'BIND'];
+  var CARD_IDS = ['FLIP', 'HAUNT', 'SUMMON', 'BIND', 'OBSERVER'];
+  var COMMON_IDS = ['FLIP', 'HAUNT', 'SUMMON', 'BIND'];
+
+  // How often the single Observer is shuffled into the deck at all. Low
+  // enough that seeing one is an event; high enough that a table will meet it
+  // a handful of times in an evening.
+  var OBSERVER_ODDS = 0.22;
 
   function applyCard(state, cardId, targets) {
     switch (cardId) {
@@ -112,6 +122,8 @@
       case 'HAUNT':  state.h(targets[0]); break;
       case 'SUMMON': state.zh(targets[0]); break;
       case 'BIND':   state.cx(targets[0], targets[1]); break;
+      case 'OBSERVER':
+        throw new Error('Observer reaches every board; play it through Game.playCard');
       default: throw new Error('unknown card ' + cardId);
     }
   }
@@ -120,8 +132,8 @@
   function coinPhrase(state, q) {
     var kind = Q.readCoin(state, q).kind;
     var n = q + 1;
-    if (kind === 'up') return 'locks coin ' + n + ' FACE-UP';
-    if (kind === 'down') return 'kills coin ' + n;
+    if (kind === 'up') return 'settles coin ' + n + ' on 1';
+    if (kind === 'down') return 'settles coin ' + n + ' on 0';
     if (kind === 'cw') return 'sets coin ' + n + ' spinning ↻';
     if (kind === 'ccw') return 'sets coin ' + n + ' spinning ↺';
     return 'leaves coin ' + n + ' at even odds';
@@ -137,6 +149,15 @@
   function previewCard(state, cardId, targets, revealed) {
     var card = CARDS[cardId];
     if (targets.length < card.arity) return null;
+    if (cardId === 'OBSERVER') {
+      var p = state.probOne(targets[0]);
+      return {
+        text: p > 1 - 1e-6 ? 'banks coin ' + (targets[0] + 1) + ' and puts everyone else to the toss'
+            : p < 1e-6 ? 'settles coin ' + (targets[0] + 1) + ' as a nought, everywhere'
+            : 'tosses coin ' + (targets[0] + 1) + ' for the whole table',
+        delta: 0, state: state.clone(), global: true
+      };
+    }
     var before = Q.expectedScore(state, revealed);
     var after = state.clone();
     applyCard(after, cardId, targets);
@@ -149,9 +170,9 @@
       var wasChained = pairIsChained(state, targets[0], targets[1]);
       var nowChained = pairIsChained(after, targets[0], targets[1]);
       if (nowChained && !wasChained) {
-        text = 'chains coins ' + (targets[0] + 1) + ' and ' + (targets[1] + 1);
+        text = 'links coins ' + (targets[0] + 1) + ' and ' + (targets[1] + 1);
       } else if (wasChained && !nowChained) {
-        text = 'snaps the chain on ' + (targets[0] + 1) + ' and ' + (targets[1] + 1);
+        text = 'breaks the link on ' + (targets[0] + 1) + ' and ' + (targets[1] + 1);
       } else {
         // A Bind with a settled control is just a conditional flip of the
         // target — say what actually happens to it.
@@ -165,7 +186,7 @@
    * Hand ranks
    * ------------------------------------------------------------------ */
 
-  var RANKS = ['Ash', 'Ember', 'Flicker', 'Blaze', 'Inferno', 'Blood Moon'];
+  var RANKS = ['Null', 'Spark', 'Pair', 'Cascade', 'Surge', 'Coherence'];
 
   function rankName(score) {
     return RANKS[Math.max(0, Math.min(RANKS.length - 1, score))];
@@ -203,7 +224,7 @@
    * Game
    * ------------------------------------------------------------------ */
 
-  var ROUND_NAMES = ['The Summoning', 'The Reveal', 'The Turning', 'The Witching Hour'];
+  var ROUND_NAMES = ['The Deal', 'The Reveal', 'The Turn', 'The Collapse'];
 
   function Game(opts) {
     this.seed = (opts.seed === undefined || opts.seed === null) ? (Date.now() & 0x7fffffff) : opts.seed;
@@ -311,9 +332,13 @@
   Game.prototype.dealCards = function () {
     var seats = this.liveSeats();
     var deck = [], i, c;
-    for (i = 0; i < CARD_IDS.length; i++) {
-      for (c = 0; c < seats.length; c++) deck.push(CARD_IDS[i]);
+    for (i = 0; i < COMMON_IDS.length; i++) {
+      for (c = 0; c < seats.length; c++) deck.push(COMMON_IDS[i]);
     }
+    // At most one Observer exists, and most hands do not contain it.
+    this.observerInDeck = this.rng() < OBSERVER_ODDS;
+    if (this.observerInDeck) deck.push('OBSERVER');
+
     Q.shuffle(deck, this.rng);
     var self = this;
     for (i = 0; i < 3; i++) {
@@ -324,7 +349,8 @@
       });
     }
     this.deckCounts = {};
-    CARD_IDS.forEach(function (id) { self.deckCounts[id] = seats.length; });
+    COMMON_IDS.forEach(function (id) { self.deckCounts[id] = seats.length; });
+    this.deckCounts.OBSERVER = this.observerInDeck ? 1 : 0;
   };
 
   Game.prototype.note = function (text) {
@@ -477,10 +503,39 @@
     var card = CARDS[cardId];
     if (targets.length !== card.arity) return { ok: false, why: 'pick ' + card.arity + ' coin(s)' };
     if (card.arity === 2 && targets[0] === targets[1]) return { ok: false, why: 'pick two different coins' };
-    applyCard(p.board, cardId, targets);
+
+    var outcome = null;
+    if (cardId === 'OBSERVER') outcome = this.observe(targets[0]);
+    else applyCard(p.board, cardId, targets);
+
     p.hand[cardId]--;
     if (p.hand[cardId] === 0) delete p.hand[cardId];
-    return { ok: true };
+    return { ok: true, outcome: outcome };
+  };
+
+  /**
+   * The Observer: measure one coin on every board still in the hand at once.
+   *
+   * Each player holds their own copy of the board, so each copy collapses
+   * according to its own amplitudes — a coin someone has already pinned stays
+   * pinned, while anyone still holding it in superposition gets a coin toss
+   * and no way back. Chains break with it.
+   */
+  Game.prototype.observe = function (q) {
+    var self = this;
+    var results = [];
+    this.players.forEach(function (p) {
+      if (p.out || p.folded) return;
+      var before = p.board.probOne(q);
+      var bit = p.board.collapse(q, self.rng);
+      results.push({ seat: p.seat, name: p.name, bit: bit, wasCertain: before > 1 - 1e-6 || before < 1e-6 });
+    });
+
+    var won = results.filter(function (r) { return r.bit === 1; }).length;
+    this.lastObservation = { coin: q, results: results, by: this.actor };
+    this.note(this.players[this.actor].name + ' plays the Observer on coin ' + (q + 1) +
+      ' — it collapses on every board. ' + won + ' of ' + results.length + ' came up 1.');
+    return this.lastObservation;
   };
 
   Game.prototype.endTurn = function () {
@@ -500,8 +555,33 @@
    */
   Game.prototype.bestPlay = function (seat) {
     var p = this.players[seat], best = null, cardId, i, j, pv;
+
+    // The Observer never changes your own expected score, so the usual search
+    // would never suggest it. Its worth is what it takes away from everyone
+    // else: play it on a coin you have already pinned and they have not.
+    if (p.hand.OBSERVER) {
+      var pick = null;
+      for (i = 0; i < this.coins; i++) {
+        if (p.board.probOne(i) < 1 - 1e-6) continue;
+        var exposed = 0;
+        this.players.forEach(function (o) {
+          if (o.out || o.folded || o.seat === seat) return;
+          if (o.board.probOne(i) < 1 - 1e-6) exposed++;
+        });
+        if (exposed && (!pick || exposed > pick.exposed)) pick = { i: i, exposed: exposed };
+      }
+      if (pick) {
+        return {
+          card: 'OBSERVER', targets: [pick.i], delta: pick.exposed,
+          text: 'banks coin ' + (pick.i + 1) + ' and leaves ' + pick.exposed +
+                ' other' + (pick.exposed > 1 ? 's' : '') + ' to the toss'
+        };
+      }
+    }
+
     for (cardId in p.hand) {
       if (!p.hand.hasOwnProperty(cardId)) continue;
+      if (cardId === 'OBSERVER') continue;
       var arity = CARDS[cardId].arity;
       for (i = 0; i < this.coins; i++) {
         if (arity === 1) {
@@ -616,6 +696,8 @@
     CANDY: CANDY,
     CARDS: CARDS,
     CARD_IDS: CARD_IDS,
+    COMMON_IDS: COMMON_IDS,
+    OBSERVER_ODDS: OBSERVER_ODDS,
     RANKS: RANKS,
     ROUND_NAMES: ROUND_NAMES,
     STARTING_STASH: STARTING_STASH,

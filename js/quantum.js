@@ -1,6 +1,6 @@
 /*
- * Candy Coven — Quantum Poker
- * quantum.js : an exact state-vector simulator for the cursed coins.
+ * Quantum Poker
+ * quantum.js : an exact state-vector simulator for the coins on the table.
  *
  * The whole game lives in a tiny corner of quantum mechanics, so this is a
  * complete and honest simulation rather than an approximation: an array of
@@ -131,6 +131,32 @@
       r = this.re[b] - this.re[c]; m = this.im[b] - this.im[c]; p[3] += r * r + m * m;
     }
     return [p[0] / 2, p[1] / 2, p[2] / 2, p[3] / 2];
+  };
+
+  /**
+   * Measure one qubit and keep the collapsed state — the real thing, not a
+   * display trick. The branch that disagrees with the outcome is zeroed and
+   * what remains is renormalised, so every superposition and every chain that
+   * involved this qubit is genuinely destroyed.
+   *
+   * This is what the Observer card does, and it is why the card is worth
+   * holding: it takes the choice away from everyone else.
+   */
+  QState.prototype.collapse = function (q, rng) {
+    var b = 1 << q;
+    var p1 = this.probOne(q);
+    var bit = (rng() < p1) ? 1 : 0;
+    var keep = bit ? p1 : 1 - p1;
+    if (keep < 1e-12) {           // the chosen branch has no amplitude; take the other
+      bit = 1 - bit;
+      keep = bit ? p1 : 1 - p1;
+    }
+    var scale = 1 / Math.sqrt(keep);
+    for (var i = 0; i < this.size; i++) {
+      if (((i & b) ? 1 : 0) === bit) { this.re[i] *= scale; this.im[i] *= scale; }
+      else { this.re[i] = 0; this.im[i] = 0; }
+    }
+    return bit;
   };
 
   /** Total probability — should always be 1. Used by the self-checks. */

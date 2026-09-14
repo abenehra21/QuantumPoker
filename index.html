@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="description" content="Candy Coven — quantum poker played with cursed coins and real candy.">
+<meta name="description" content="Quantum Poker — a card game of qubits, played for candy.">
 <meta name="theme-color" content="#120d0a">
-<title>Candy Coven</title>
+<title>Quantum Poker</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IM+Fell+English+SC&family=Spectral:ital,wght@0,400;0,600;1,400&family=Barlow+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/style.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='18' fill='%23120d0a'/><circle cx='50' cy='50' r='34' fill='%23e8a33d'/><path d='M33 41 L52 48 L35 56 Z M67 41 L48 48 L65 56 Z M50 50 L44 62 L56 62 Z M32 66 L41 70 L45 64 L51 71 L57 64 L61 70 L70 67 L64 79 Q50 86 36 79 Z' fill='%23120d0a'/></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='18' fill='%23120d0a'/><circle cx='50' cy='50' r='35' fill='%23e8a33d'/><ellipse cx='50' cy='50' rx='13' ry='35' fill='none' stroke='%23120d0a' stroke-width='3' opacity='.4'/><path d='M40 36 L57 26 L57 74 L47 74 L47 41 Z M36 74 h34 v8 h-34 z' fill='%23120d0a'/></svg>">
 </head>
 <body>
 
@@ -19,10 +19,10 @@
 <!-- ============================ SETUP ============================ -->
 <section id="screen-setup" class="screen">
   <div class="setup">
-    <p class="eyebrow">A wager in five qubits</p>
-    <h1 class="brand"><span class="brand-a">Candy</span><span class="brand-b">Coven</span></h1>
+    <p class="eyebrow">Five qubits · one pot · real candy</p>
+    <h1 class="brand"><span class="brand-a">Quantum</span><span class="brand-b">Poker</span></h1>
     <div class="ornament" id="setup-rule"></div>
-    <p class="tagline">Five cursed coins. Every one that lands face&#8209;up is a point.<br>
+    <p class="tagline">Five qubits on the table. Every one that settles on&nbsp;1 is a point.<br>
       Most points takes the candy.</p>
 
     <div class="seat-list" id="seat-list"></div>
@@ -91,7 +91,7 @@
     <div class="curtain-sigil" id="curtain-sigil"></div>
     <p class="eyebrow">Pass the table</p>
     <h2 id="curtain-name">—</h2>
-    <p class="muted">Everyone else, eyes down. Your coins and your cards are yours alone.</p>
+    <p class="muted">Everyone else, eyes down. Your board and your cards are yours alone.</p>
     <button class="btn primary big" id="curtain-go" type="button">I have it</button>
   </div>
 </div>
@@ -159,11 +159,11 @@
     <div class="film-transport">
       <button class="icon-btn film-play" id="film-play" type="button" aria-label="Play"></button>
       <div class="film-scrub" id="film-scrub" role="slider" tabindex="0"
-           aria-label="Scrub the tutorial" aria-valuemin="0" aria-valuemax="80" aria-valuenow="0">
+           aria-label="Scrub the tutorial" aria-valuemin="0" aria-valuemax="99" aria-valuenow="0">
         <div class="film-track"><div class="film-fill" id="film-fill"></div></div>
         <div class="film-marks" id="film-marks"></div>
       </div>
-      <span class="film-time" id="film-time">0:00 / 1:20</span>
+      <span class="film-time" id="film-time">0:00 / 1:39</span>
       <button class="btn ghost film-skip" id="film-skip" type="button">Skip</button>
     </div>
 
@@ -171,6 +171,16 @@
       <button class="btn" id="film-practice" type="button">Play a practice hand</button>
       <button class="btn primary" id="film-deal" type="button">Deal me in</button>
     </div>
+  </div>
+</div>
+
+<div class="overlay" id="observed" hidden>
+  <div class="sheet">
+    <p class="eyebrow">The Observer</p>
+    <h2 class="sheet-title" id="observed-title">Coin collapses</h2>
+    <p class="muted small">Measured on every board at once. No one can change it now.</p>
+    <div id="observed-body"></div>
+    <button class="btn primary" id="observed-close" type="button">Carry on</button>
   </div>
 </div>
 

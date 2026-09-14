@@ -1,5 +1,5 @@
 /*
- * Candy Coven — ui.js
+ * Quantum Poker — ui.js
  *
  * One rule shapes this file: nodes persist. Coins, seats and cards are built
  * once and then updated in place, so the browser can animate a coin flipping
@@ -182,9 +182,9 @@
 
     var edge = el('div', 'coin-edge');
     var front = el('div', 'coin-face coin-front');
-    front.innerHTML = Art.coinFace();
+    front.innerHTML = Art.coinOne();
     var back = el('div', 'coin-face coin-back');
-    back.innerHTML = Art.coinSkull();
+    back.innerHTML = Art.coinZero();
     d3.appendChild(edge); d3.appendChild(front); d3.appendChild(back);
     coin.appendChild(d3);
     shell.appendChild(coin);
@@ -248,16 +248,16 @@
   }
 
   function tagClass(kind, chain) {
-    if (chain) return 'link';
+    if (chain) return chain.same ? 'link' : 'link-opp';
     if (kind === 'up') return 'good';
     if (kind === 'cw' || kind === 'ccw') return 'spin';
     return '';
   }
 
   function tagText(kind, chain) {
-    if (chain) return (chain.same ? '⛓ = ' : '⛓ ≠ ') + (chain.partner + 1);
-    if (kind === 'up') return 'face-up';
-    if (kind === 'down') return 'dead';
+    if (chain) return (chain.same ? 'linked ' : 'opposed ') + (chain.partner + 1);
+    if (kind === 'up') return '1';
+    if (kind === 'down') return '0';
     if (kind === 'cw') return '↻ 50%';
     if (kind === 'ccw') return '↺ 50%';
     return '50%';
@@ -266,9 +266,9 @@
   function coinAria(i, revealed, info, chain) {
     if (!revealed) return 'Coin ' + (i + 1) + ', not turned over yet';
     var what = {
-      up: 'face-up, a sure point', down: 'skull side up, dead',
+      up: 'settled on 1, a sure point', down: 'settled on 0, worth nothing',
       cw: 'spinning clockwise, even odds', ccw: 'spinning counter-clockwise, even odds',
-      murky: 'chained, even odds'
+      murky: 'linked to another coin, even odds'
     }[info.kind];
     return 'Coin ' + (i + 1) + ', ' + what + (chain
       ? ', chained to coin ' + (chain.partner + 1) + (chain.same ? ', lands the same' : ', lands opposite')
@@ -302,13 +302,44 @@
     if (pickedCoins.indexOf(i) !== -1) return;
     pickedCoins.push(i);
     if (pickedCoins.length < card.arity) { hint = null; render(); return; }
+    var wasObserver = selectedCard === 'OBSERVER';
     var res = game.playCard(selectedCard, pickedCoins.slice());
     selectedCard = null;
     pickedCoins = [];
     hint = null;
-    if (res.ok) Sound.cast();
+    if (res.ok) {
+      if (wasObserver) { Sound.observe(); showObservation(res.outcome); }
+      else Sound.cast();
+    }
     render();
     if (!res.ok) $('#read').textContent = res.why;
+  }
+
+  /**
+   * The Observer reaches boards the player cannot see, so the result has to be
+   * shown to them — otherwise the most expensive card in the deck would appear
+   * to do nothing.
+   */
+  function showObservation(obs) {
+    if (!obs) return;
+    var body = $('#observed-body');
+    body.innerHTML = '';
+    obs.results.forEach(function (r) {
+      var row = el('div', 'observed-row' + (r.seat === obs.by ? ' mine' : ''));
+      var who = el('span', 'observed-who');
+      who.innerHTML = Art.sigil(game.players[r.seat].sigil) +
+        '<span>' + esc(r.name) + (r.seat === obs.by ? ' (you)' : '') + '</span>';
+      row.appendChild(who);
+      var chip = el('span', 'observed-chip ' + (r.bit ? 'one' : 'zero'));
+      chip.innerHTML = r.bit ? Art.coinOne() : Art.coinZero();
+      row.appendChild(chip);
+      row.appendChild(el('span', 'observed-note', r.wasCertain ? 'was already settled' : 'was in superposition'));
+      body.appendChild(row);
+    });
+    $('#observed-title').textContent = 'Coin ' + (obs.coin + 1) + ' collapses';
+    show($('#observed'));
+    $('#observed-close').onclick = function () { hide($('#observed')); };
+    $('#observed-close').focus();
   }
 
   function drawChains() {
@@ -478,20 +509,27 @@
   function renderRead() {
     var node = $('#read');
     if (hint) { node.innerHTML = '<span class="hot">' + esc(hint.label) + '</span>'; return; }
-    if (game.revealed === 0) { node.textContent = 'No coins down yet — this is pure nerve'; return; }
+    if (game.revealed === 0) { node.textContent = 'No coins down yet. This one is on nerve.'; return; }
+
     var board = activeBoard();
     var sure = 0, i;
     for (i = 0; i < game.revealed; i++) if (Q.readCoin(board, i).kind === 'up') sure++;
     var chains = Q.findChains(board).filter(function (c) {
       return c.a < game.revealed && c.b < game.revealed;
     });
-    var text = sure + ' locked · ' + Q.expectedScore(board, game.revealed).toFixed(1) +
-      ' expected of ' + game.revealed;
-    if (chains.length) {
-      text += ' · ' + chains.map(function (c) {
-        return (c.a + 1) + ' and ' + (c.b + 1) + (c.same ? ' land together' : ' land opposite');
-      }).join('; ');
-    }
+
+    // Say the one thing worth knowing, in a sentence. The arithmetic lives
+    // behind the Psi button, where the people who want it will look.
+    var parts = [];
+    parts.push(sure === 0 ? 'Nothing settled yet'
+      : sure === 1 ? 'One coin settled on 1'
+      : sure + ' coins settled on 1');
+    chains.forEach(function (c) {
+      parts.push('coins ' + (c.a + 1) + ' and ' + (c.b + 1) +
+        (c.same ? ' are linked' : ' are opposed'));
+    });
+    var text = parts.join(' · ') + '.';
+    if (nerd) text += '  ⟨n⟩ = ' + Q.expectedScore(board, game.revealed).toFixed(2);
     node.textContent = text;
   }
 
@@ -510,10 +548,11 @@
   }
 
   function renderLedger() {
-    var recent = game.log.slice(-3).reverse();
-    $('#ledger').innerHTML = recent.length
-      ? recent.map(function (line, i) { return i === 0 ? '<b>' + esc(line) + '</b>' : esc(line); }).join('  ·  ')
-      : '';
+    var box = $('#ledger');
+    box.innerHTML = '';
+    game.log.slice(-3).reverse().forEach(function (line, i) {
+      box.appendChild(el('div', 'ledger-line' + (i === 0 ? ' fresh' : ''), line));
+    });
   }
 
   /* ----------------------------------------------------------------- tray -- */
@@ -657,15 +696,14 @@
       (opts.selected ? ' selected' : '') + (opts.hinted ? ' hinted' : ''));
     node.type = 'button';
     node.disabled = count === 0 && !opts.static;
+    if (card.rare) node.classList.add('rare');
     node.innerHTML =
       '<span class="card-name">' + card.name + '</span>' +
       Art.cardArt(id) +
       '<span class="card-blurb">' + card.blurb + '</span>' +
       (nerd ? '<span class="card-gate">' + card.gate + '</span>' : '');
-    if (count > 1) {
-      var badge = el('span', 'card-count', String(count));
-      node.appendChild(badge);
-    }
+    if (card.rare) node.appendChild(el('span', 'rare-mark', 'rare'));
+    if (count > 1) node.appendChild(el('span', 'card-count', String(count)));
     if (opts.onPick) node.onclick = opts.onPick;
 
     if (!REDUCED) {
@@ -744,13 +782,13 @@
       var nodes = [];
       p.bits.forEach(function (bit) {
         var c = el('div', 'sd-coin ' + (bit ? 'hit' : 'miss'));
-        c.innerHTML = bit ? Art.coinFace() : Art.coinSkull();
+        c.innerHTML = bit ? Art.coinOne() : Art.coinZero();
         coins.appendChild(c);
         nodes.push({ node: c, bit: bit });
       });
       sec.appendChild(coins);
 
-      var rank = el('div', 'rank' + (p.score === 5 ? ' bloodmoon' : ''), '');
+      var rank = el('div', 'rank' + (p.score === 5 ? ' coherence' : ''), '');
       sec.appendChild(rank);
       body.appendChild(sec);
       rows.push({ p: p, sec: sec, rank: rank, nodes: nodes });
@@ -766,7 +804,7 @@
       sdTimers.push(setTimeout(function () {
         rank.innerHTML = E.rankName(p.score) + ' <span class="n">' + p.score + '</span>';
         if (p.score === best) sec.classList.add('leader');
-        if (p.score === 5) Sound.bloodMoon();
+        if (p.score === 5) Sound.coherence();
       }, delay));
     });
 
@@ -864,10 +902,10 @@
       'You bet candy between each coin, exactly as you would at poker.</p></div>' +
 
       '<div><h3>Reading a coin</h3><table class="rules-table">' +
-      coinRow('up', Art.coinFace(), 'Face-up', 'A point, banked. Only your own card can spoil it.') +
-      coinRow('down', Art.coinSkull(), 'Skull', 'Dead. Worth nothing unless you turn it.') +
-      '<tr><td>↻ &nbsp;Spinning</td><td>Even money. Which way it turns decides which card can catch it.</td></tr>' +
-      '<tr><td>⛓ &nbsp;Chained</td><td>Two coins bound together. They always land alike — or always opposed.</td></tr>' +
+      coinRow('up', Art.coinOne(), 'Settled on 1', 'A point, banked. Only your own card can spoil it.') +
+      coinRow('down', Art.coinZero(), 'Settled on 0', 'Worth nothing unless you turn it.') +
+      '<tr><td>↻ &nbsp;Spinning</td><td>Even money — a qubit in superposition. Which way it turns decides which card can catch it.</td></tr>' +
+      '<tr><td>Linked</td><td>Two coins entangled. They always settle alike — or always opposed.</td></tr>' +
       '</table></div>' +
 
       '<div><h3>Your cards</h3><table class="rules-table">' +
@@ -878,7 +916,14 @@
       }).join('') +
       '</table><p>Three each, dealt face down, played after the final bet. Flip, Haunt and Bind undo ' +
       'themselves — play one twice and nothing has happened. <b>Summon does not.</b> It walks a coin ' +
-      'round a loop of four — dead, ↻, face-up, ↺ — so a second Summon throws away the point you just won.</p></div>' +
+      'round a loop of four — 0, ↻, 1, ↺ — so a second Summon throws away the point you just won.</p>' +
+
+      '<p><b>The Observer</b> is the exception to everything. There is only ever one, and most hands ' +
+      'do not contain it at all. It does not change a coin — it <b>measures</b> one, on every board at ' +
+      'the table at once. Whatever each player&rsquo;s copy of that coin was doing, it stops: ' +
+      'superposition gone, links broken, the value fixed. Play it on a coin you have already settled ' +
+      'on 1 and you keep your point while everyone still holding it in superposition gets a coin ' +
+      'toss and no way back.</p></div>' +
 
       '<div><h3>The candy</h3><table class="rules-table">' +
       E.CANDY.map(function (c) {
@@ -893,8 +938,10 @@
       '</p></div>' +
 
       '<div><h3>Underneath</h3><p>The coins are qubits and the cards are quantum gates — Flip is X, ' +
-      'Haunt is Hadamard, Summon is ZH, Bind is CNOT. Spinning is superposition; chained is ' +
-      'entanglement. Press <b>Ψ</b> to see the real states. You need none of it to win.</p></div>' +
+      'Haunt is Hadamard, Summon is ZH, Bind is CNOT, and the Observer is measurement itself. ' +
+      'Spinning is superposition; linked is entanglement. The card art is the circuit notation: ' +
+      'Bind is a real CNOT symbol, the Observer a real measurement gate. Press <b>Ψ</b> for the ' +
+      'states and the numbers. You need none of it to win.</p></div>' +
 
       '<div><h3>Rather be shown?</h3><p id="rules-watch-line">' +
       'There is a minute-and-a-half walk-through of all of this.</p></div>';
@@ -989,8 +1036,8 @@
         coin.dataset.kind = info.kind;
         var d3 = el('div', 'coin-3d');
         var edge = el('div', 'coin-edge');
-        var f = el('div', 'coin-face coin-front'); f.innerHTML = Art.coinFace();
-        var b = el('div', 'coin-face coin-back'); b.innerHTML = Art.coinSkull();
+        var f = el('div', 'coin-face coin-front'); f.innerHTML = Art.coinOne();
+        var b = el('div', 'coin-face coin-back'); b.innerHTML = Art.coinZero();
         d3.appendChild(edge); d3.appendChild(f); d3.appendChild(b);
         coin.appendChild(d3); shell.appendChild(coin);
 

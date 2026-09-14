@@ -1,5 +1,5 @@
 /*
- * Candy Coven — sound.js
+ * Quantum Poker — sound.js
  * Synthesised on the fly with WebAudio. No audio files, nothing to download.
  *
  * Everything is short, dry and low in the mix. A card game wants the click of
@@ -117,8 +117,17 @@
       noise(t + 0.18, 0.5, 1800, 0.6, 0.14);
     },
 
-    /** Five face-up. Something is very wrong and very good. */
-    bloodMoon: function () {
+    /** A measurement. Everything in superposition stops being possible. */
+    observe: function () {
+      var c = ready(); if (!c) return;
+      var t = c.currentTime;
+      tone(1760, t, 0.14, 'sine', 0.14, 440);          // the wavefunction falling in
+      noise(t + 0.04, 0.45, 900, 0.5, 0.2, 'lowpass');
+      tone(110, t + 0.06, 0.7, 'triangle', 0.16);
+    },
+
+    /** Five ones. Everything came up coherent. */
+    coherence: function () {
       var c = ready(); if (!c) return;
       var t = c.currentTime;
       [261.63, 311.13, 392.00, 466.16].forEach(function (f, i) {

@@ -1,5 +1,5 @@
 /*
- * Candy Coven — self-checks. Open index.html?test to run them.
+ * Quantum Poker — self-checks. Open index.html?test to run them.
  * No framework: plain asserts, printed to the page and the console.
  */
 (function (global) {
@@ -187,7 +187,7 @@
     s.h(0);
     var pv = E.previewCard(s, 'SUMMON', [0], 5);
     ok('Summon on a ↻ coin is worth exactly +0.5', near(pv.delta, 0.5, 1e-9), String(pv.delta));
-    ok('…and says it locks the coin face-up', /FACE-UP/.test(pv.text), pv.text);
+    ok('…and says it settles the coin on 1', /settles coin 1 on 1/.test(pv.text), pv.text);
   })();
 
   (function () {
@@ -203,17 +203,17 @@
     s.x(0);                                  // coin 1 face-up, coin 3 dead
     var pv = E.previewCard(s, 'BIND', [0, 2], 5);
     ok('Bind off a face-up coin flips the target, and says so',
-      near(pv.delta, 1, 1e-9) && /locks coin 3 FACE-UP/.test(pv.text), pv.text);
+      near(pv.delta, 1, 1e-9) && /settles coin 3 on 1/.test(pv.text), pv.text);
   })();
 
   (function () {
     var s = new Q.QState(5);
     s.h(0);
     var pv = E.previewCard(s, 'BIND', [0, 1], 5);
-    ok('Bind off a spinning coin says it chains them', /chains coins 1 and 2/.test(pv.text), pv.text);
+    ok('Bind off a spinning coin says it links them', /links coins 1 and 2/.test(pv.text), pv.text);
     var chained = pv.state;
     var pv2 = E.previewCard(chained, 'BIND', [0, 1], 5);
-    ok('…and Bind again says it snaps the chain', /snaps the chain/.test(pv2.text), pv2.text);
+    ok('…and Bind again says it breaks the link', /breaks the link/.test(pv2.text), pv2.text);
   })();
 
   /* ---- 6. candy ---- */
@@ -336,7 +336,90 @@
     ok('the bots hit all-ins (' + allIns + ') and split pots (' + splits + ')', allIns > 0 && splits > 0);
   })();
 
-  /* ---- 9. the tutorial film ---- */
+  /* ---- 9. the Observer ---- */
+
+  group('The Observer');
+
+  (function () {
+    var rng = Q.mulberry32(3), ones = 0, n = 3000, i, s2, bit;
+    for (i = 0; i < n; i++) {
+      s2 = new Q.QState(3); s2.h(0); s2.cx(0, 1); s2.h(2);
+      bit = s2.collapse(0, rng);
+      ones += bit;
+      if (Math.abs(s2.probOne(1) - bit) > 1e-9) { ok('entangled partner follows', false); return; }
+      if (Q.findChains(s2).length) { ok('the link is destroyed', false); return; }
+      if (Math.abs(s2.probOne(2) - 0.5) > 1e-9) { ok('untouched coins are untouched', false); return; }
+      if (Math.abs(s2.norm() - 1) > 1e-9) { ok('state stays normalised', false); return; }
+    }
+    ok('measuring a spinning coin is a fair toss', Math.abs(ones / n - 0.5) < 0.03, (ones / n).toFixed(3));
+    ok('its entangled partner collapses with it, every time', true);
+    ok('the link, the superposition and nothing else are destroyed', true);
+  })();
+
+  (function () {
+    var rng = Q.mulberry32(8), s2, i, bad = 0;
+    for (i = 0; i < 500; i++) {
+      s2 = new Q.QState(2); s2.x(0);
+      if (s2.collapse(0, rng) !== 1) bad++;
+      s2 = new Q.QState(2);
+      if (s2.collapse(0, rng) !== 0) bad++;
+    }
+    ok('a coin already settled cannot be changed by measuring it', bad === 0, bad + ' surprises');
+  })();
+
+  (function () {
+    // The whole point of the card: it reaches boards the player cannot touch.
+    var players = [{ name: 'A', sigil: 'moon' }, { name: 'B', sigil: 'key' }, { name: 'C', sigil: 'eye' }];
+    var g = new E.Game({ players: players, seed: 12 });
+    g.players.forEach(function (p) { p.board = new Q.QState(5); });
+    g.players[0].board.x(2);              // A has coin 3 pinned on 1
+    g.players[1].board.h(2);              // B still has it spinning
+    g.players[2].board.h(2); g.players[2].board.cx(2, 3);   // C has it linked to coin 4
+
+    var obs = g.observe(2);
+    ok('it returns a result for every player still in the hand', obs.results.length === 3,
+      obs.results.length + ' results');
+    ok('a player who had already settled the coin keeps their value',
+      obs.results[0].bit === 1 && g.players[0].board.probOne(2) === 1);
+    ok('every board is left with that coin settled',
+      g.players.every(function (p) {
+        var v = p.board.probOne(2);
+        return v < 1e-9 || v > 1 - 1e-9;
+      }));
+    ok('a link through the measured coin is broken on that board',
+      Q.findChains(g.players[2].board).length === 0);
+    ok('it says what happened in the log', /Observer/.test(g.log[g.log.length - 1]), g.log[g.log.length - 1]);
+  })();
+
+  (function () {
+    var rng = Q.mulberry32(1), withIt = 0, trials = 4000, i;
+    for (i = 0; i < trials; i++) if (rng() < E.OBSERVER_ODDS) withIt++;
+    ok('it is in roughly a fifth of decks', Math.abs(withIt / trials - E.OBSERVER_ODDS) < 0.03,
+      (withIt / trials).toFixed(3));
+
+    var g = new E.Game({ players: [{ name: 'A' }, { name: 'B' }], seed: 5 });
+    var seen = 0, most = 0, h;
+    for (h = 0; h < 300; h++) {
+      // startHand() empties hands before dealing; do the same here so the
+      // count is per-deal rather than cumulative.
+      g.players.forEach(function (p) { p.hand = {}; });
+      g.dealCards();
+      var count = g.players.reduce(function (a, p) { return a + (p.hand.OBSERVER || 0); }, 0);
+      most = Math.max(most, count);
+      seen += count;
+    }
+    ok('never more than one is in play at a time', most <= 1, 'saw ' + most);
+    ok('it does turn up, but not often', seen > 5 && seen < 120, seen + ' in 300 deals');
+  })();
+
+  (function () {
+    var g = new E.Game({ players: [{ name: 'A' }, { name: 'B' }], seed: 21 });
+    var threw = false;
+    try { E.applyCard(g.players[0].board, 'OBSERVER', [0]); } catch (e) { threw = true; }
+    ok('it refuses to be applied to one board in isolation', threw);
+  })();
+
+  /* ---- 10. the tutorial film ---- */
 
   group('The how-to-play film');
 
@@ -389,7 +472,7 @@
       F.chapters.length + ' chapters');
 
     var ending = F.stateAt(F.duration);
-    ok('it ends on the pay-off — five coins face-up',
+    ok('it ends on the pay-off — five coins on 1',
       ending.coins.length === 5 && ending.coins.every(function (c) { return c.k === 'up'; }));
 
     // The spotlight must never point at a coin that is not on the stage.
@@ -412,7 +495,7 @@
 
   var pre = document.getElementById('test-out');
   pre.hidden = false;
-  pre.textContent = 'Candy Coven — self-checks\n' + '='.repeat(46) + '\n' +
+  pre.textContent = 'Quantum Poker — self-checks\n' + '='.repeat(46) + '\n' +
     head + '\n' + out.join('\n') +
     '\n\n' + '='.repeat(46) + '\nRemove ?test from the URL to play.';
   pre.style.color = failed === 0 ? '#8ee6a0' : '#ff9a9a';

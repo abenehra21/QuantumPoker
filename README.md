@@ -1,15 +1,16 @@
-# Candy Coven
+# Quantum Poker
 
-**Quantum poker, played for candy.** Built for **IBM Quantum Fall Fest 2026**.
+**A card game of qubits, played for candy.** Built for **IBM Quantum Fall Fest 2026**.
 
-Five cursed coins sit on the table. At the end of the hand they all land. Every coin
-that lands face-up is a point, most points takes the pot, and the pot is made of
-chocolate. You bet, you bluff, you fold — exactly like poker.
+Five qubits sit on the table as coins. At the end of the hand they all settle — on a 1
+or a 0. Every coin showing a 1 is a point, most points takes the pot, and the pot is
+made of chocolate. You bet, you bluff, you fold — exactly like poker.
 
-The coins are real qubits and the cards are real quantum gates. You will not be told
-that while you play unless you ask.
+The coins really are qubits and the cards really are quantum gates. Two of the cards
+carry the circuit symbol a physicist would draw. You will not be told any of that while
+you play unless you ask.
 
-![The five states a cursed coin can be in](docs/coins.svg)
+![The states a qubit on the table can be in](docs/coins.svg)
 
 ---
 
@@ -29,7 +30,7 @@ and a curtain covers the screen between turns so nobody sees a hand they shouldn
 There is nothing to sign into and no IBM Quantum account needed; the quantum mechanics
 is simulated locally in about sixty lines of JavaScript.
 
-First time? Hit **Never played** on the title screen. A ninety-second walk-through
+First time? Hit **Never played** on the title screen. A walk-through of about a minute and a half
 plays: the coins land, the cards come out one at a time and do their thing, candy goes
 into the pot, and the whole game is explained without a single ket. It can be paused,
 scrubbed, and jumped by chapter, and it ends by offering either a practice hand or a
@@ -72,16 +73,18 @@ at a glance:
 
 | Coin | Means | Odds |
 |---|---|---|
-| **Face-up** | Locked. A point in your pocket. | 100% |
-| **Skull** | Dead. Worthless unless you flip it. | 0% |
-| ↻ **Spinning clockwise** | Still in the air. | 50% |
-| ↺ **Spinning counter-clockwise** | Also still in the air — but the other way round. | 50% |
+| **Settled on 1** | Banked. A point in your pocket. | 100% |
+| **Settled on 0** | Worth nothing, unless you turn it. | 0% |
+| ↻ **Spinning clockwise** | Still undecided. | 50% |
+| ↺ **Spinning counter-clockwise** | Also undecided — but the other way round. | 50% |
 
-Which way a coin spins matters, because it decides which card can catch it.
+Which way a coin spins matters, because it decides which card can catch it. A settled
+coin lies still; a spinning one turns, showing you its 1 face and its 0 face in turn,
+because it is genuinely both until something measures it.
 
-Two coins can also be **chained**, drawn with a glowing link between them. Chained coins
-always land the same way up — or always opposite. Chain a coin you can control to one
-you cannot, and you get two points for the price of one.
+Two coins can also be **linked** — entangled — drawn with a glowing arc between them.
+Linked coins always settle the same way, or always opposite. Link a coin you can control
+to one you cannot, and you get two points for the price of one.
 
 ---
 
@@ -89,17 +92,32 @@ you cannot, and you get two points for the price of one.
 
 Three cards each, dealt face-down, played after the last round of betting.
 
-| Card | Does |
-|---|---|
-| **Flip** | Turns a resting coin over. A spinning coin shrugs it off. |
-| **Haunt** | Sets a resting coin spinning — or stops one that already is. |
-| **Summon** | Catches a **clockwise** spin face-up. Your best card. |
-| **Bind** | Chains two coins so they land together — or snaps a chain. |
+| Card | Does | Gate |
+|---|---|---|
+| **Flip** | Turns a settled coin over. A spinning coin shrugs it off. | `X` |
+| **Haunt** | Sets a settled coin spinning — or stops one that already is. | `H` |
+| **Summon** | Catches a **clockwise** spin and pins it on 1. Your best card. | `ZH` |
+| **Bind** | Links two coins so they settle together — or breaks a link. | `CNOT` |
 
 Flip, Haunt and Bind undo themselves: play one twice on the same coin and nothing has
 happened. **Summon is different.** It walks a coin around a four-step loop —
-dead → ↻ → face-up → ↺ — so a second Summon on the same coin throws away the point you
-just won.
+0 → ↻ → 1 → ↺ — so a second Summon on the same coin throws away the point you just won.
+
+### And then there is the Observer
+
+There is exactly one, and most hands do not contain it at all.
+
+The Observer does not change a coin. It **measures** one — on every board at the table
+at once. Whatever each player's copy of that coin was doing, it stops: superposition
+gone, links broken, the value fixed where it fell.
+
+Play it on a coin you have already settled on 1, and you keep your point while everyone
+still holding that coin in superposition gets a coin toss and no way back. It is the
+only card in the deck that reaches across the table, and it is the reason to stay in a
+hand you are quietly winning.
+
+Its face is the measurement gate from any quantum circuit diagram, because that is
+exactly what it is.
 
 Hovering a card over a coin tells you the exact outcome before you commit. If you would
 rather not think, the **Hint** button plays the best card for you.
@@ -108,23 +126,23 @@ rather not think, the **Hint** button plays the best card for you.
 
 ## A hand, start to finish
 
-1. **The Summoning** — blinds go in, cards are dealt face-down, first round of betting.
+1. **The Deal** — blinds go in, cards are dealt face-down, first round of betting.
    No coins on the table yet; you are betting on nerve.
 2. **The Reveal** — three coins turn over. Bet again.
-3. **The Turning** — a fourth coin. Bet again.
-4. **The Witching Hour** — the fifth and last coin. Final bet.
+3. **The Turn** — a fourth coin. Bet again.
+4. **The Collapse** — the fifth and last coin. Final bet.
 5. **Cards on the coins** — each player in turn plays whatever cards they like on
    *their own* copy of the board, behind a privacy curtain.
-6. **Showdown** — every coin lands, one at a time. Count the face-ups.
+6. **Showdown** — every coin settles, one at a time. Count the ones.
 
-| Face-up | Rank |
+| Coins on 1 | Rank |
 |--:|---|
-| 0 | Ash |
-| 1 | Ember |
-| 2 | Flicker |
-| 3 | Blaze |
-| 4 | Inferno |
-| 5 | **Blood Moon** |
+| 0 | Null |
+| 1 | Spark |
+| 2 | Pair |
+| 3 | Cascade |
+| 4 | Surge |
+| 5 | **Coherence** |
 
 ---
 
@@ -133,14 +151,9 @@ rather not think, the **Hint** button plays the best card for you.
 Press **ψ** at any time. Nerd Mode overlays the actual states — |0⟩, |1⟩, |+⟩, |−⟩, the
 exact probabilities, and the gate behind each card:
 
-| Card | Gate |
-|---|---|
-| Flip | `X` |
-| Haunt | `H` |
-| Summon | `ZH` |
-| Bind | `CNOT` |
-
-Spinning is superposition, spin direction is relative phase, and chained is a Bell pair.
+Spinning is superposition, spin direction is relative phase, linked is a Bell pair, and
+the Observer is a projective measurement — the branch that disagrees with the outcome is
+zeroed and what remains renormalised, which is why it destroys entanglement it touches.
 `js/quantum.js` is an exact state-vector simulator — 2ⁿ complex amplitudes with the real
 unitaries applied to them, no shortcuts — so everything the table shows you is the true
 quantum answer, including the entanglement detection, which projects each pair onto the
@@ -162,7 +175,7 @@ js/art.js           every mark on the table, drawn as SVG
 js/sound.js         sound effects, synthesised — no audio files
 js/tutorial.js      the how-to-play film: a cue timeline, not a video
 js/ui.js            screens and interaction
-js/tests.js         54 self-checks — open index.html?test
+js/tests.js         67 self-checks — open index.html?test
 docs/coins.svg      the illustration at the top of this file
 Python/             the original Qiskit implementation (see below)
 ```
@@ -188,11 +201,12 @@ running time, and that it ends on the pay-off.
 
 ## Credits and original work
 
-Candy Coven is a reskin of **Quantum Poker**, designed and written by **Franz G. Fuchs**,
-**Vemund Falch** and **Christian Johnsen** at [SINTEF](https://www.sintef.no/). The game
-design and the quantum mechanics behind it are entirely theirs. What is new here is the
-presentation: the coin metaphor, the Halloween table, the candy stakes, and a browser
-implementation that needs no Python.
+This is a reworking of **Quantum Poker**, designed and written by **Franz G. Fuchs**,
+**Vemund Falch** and **Christian Johnsen** at [SINTEF](https://www.sintef.no/). The
+original game design and the quantum mechanics behind it are theirs. What is new here is
+the presentation — the coin metaphor, the table, the candy stakes, a browser
+implementation that needs no Python — and one addition to the rules: the Observer card,
+which is not in the original.
 
 **The paper:**
 
@@ -236,14 +250,15 @@ python Python/runPoker.py
 ```
 
 The notebook [Python/runPokerJN.ipynb](Python/runPokerJN.ipynb) walks through a complete
-round with the physics explained properly. If Candy Coven gets someone curious, that is
+round with the physics explained properly. If this version gets someone curious, that is
 where to send them next.
 
 ### What changed in the browser version
 
 The rules are the same game; the framing is not.
 
-- Qubits became coins, gates became cards, and every ket moved behind the ψ toggle.
+- Qubits became coins struck with the value they would read, gates became cards, and
+  every ket moved behind the Ψ toggle.
 - The +/− basis toggle and the Bell-state inspector panels are gone — spin direction and
   a drawn chain say the same thing without a control panel.
 - The unused `CH`, `SWAP`, `CCX`, `SRX`, `SRZ` and `Z` gates were dropped; the deck was
@@ -253,7 +268,8 @@ The rules are the same game; the framing is not.
 - The Matplotlib window became a felt table under a candle: seats that orbit as the
   turn passes, cards that lean toward the cursor, coins that drop and ring when they
   land, and a pot that counts up rather than jumping.
-- The rules got a ninety-second film instead of a wall of text.
+- The rules got a film instead of a wall of text.
+- A fifth card, the Observer, was added: the only one that reaches other players.
 
 ---
 
