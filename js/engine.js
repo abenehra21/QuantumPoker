@@ -1,220 +1,224 @@
 /*
- * Quantum Poker
- * engine.js : the rules. Candy, betting rounds, side pots, showdown.
+ * Quantum Hold'em — engine.js
+ * The rules: chips, streets, betting, the five gate cards, showdown.
  *
  * No DOM in here. The whole game can be driven from a script, which is how
- * the self-checks in tests.js exercise it.
+ * the bots and the self-checks use it.
  */
-(function (global) {
+(function (root) {
   'use strict';
 
-  var Q = global.Q;
-
-  /* ------------------------------------------------------------------ *
-   * Candy
-   * ------------------------------------------------------------------ */
-
-  var CANDY = [
-    { key: 'bar',  name: 'Chocolate bar', short: 'Bar',  value: 25 },
-    { key: 'fun',  name: 'Fun-size bar',  short: 'Fun',  value: 10 },
-    { key: 'pop',  name: 'Lollipop',      short: 'Pop',  value: 5  },
-    { key: 'corn', name: 'Candy corn',    short: 'Corn', value: 1  }
-  ];
-
-  var STARTING_STASH = { bar: 4, fun: 5, pop: 6, corn: 20 }; // = 200 points
-
-  function stashValue(stash) {
-    return CANDY.reduce(function (sum, c) { return sum + (stash[c.key] || 0) * c.value; }, 0);
-  }
-
-  /**
-   * Break a point total into actual candy. 1 / 5 / 10 / 25 is a canonical
-   * system, so greedy is optimal — no need for anything cleverer.
-   */
-  function toCandy(points) {
-    var left = Math.max(0, Math.round(points));
-    var out = {};
-    CANDY.forEach(function (c) {
-      out[c.key] = Math.floor(left / c.value);
-      left -= out[c.key] * c.value;
-    });
-    return out;
-  }
-
-  function candyLine(points) {
-    return describeStash(toCandy(points));
-  }
-
-  function describeStash(stash) {
-    var parts = CANDY.filter(function (c) { return (stash[c.key] || 0) > 0; })
-      .map(function (c) { return stash[c.key] + '× ' + c.short; });
-    return parts.length ? parts.join(', ') : 'nothing';
-  }
-
-  /**
-   * Who physically hands what to whom at the end of the night.
-   *
-   * toCandy() alone is not enough: it would happily tell the winner to collect
-   * 24 chocolate bars when the whole table only brought 12. This deals out the
-   * real pool — the candy that actually exists — largest denomination first,
-   * richest player first, so every payout can genuinely be made.
-   */
-  function settlePool(players) {
-    var n = players.length;
-    var pool = {};
-    CANDY.forEach(function (c) { pool[c.key] = (STARTING_STASH[c.key] || 0) * n; });
-
-    var order = players.map(function (p, i) { return i; })
-      .sort(function (a, b) { return players[b].points - players[a].points; });
-
-    var out = players.map(function () { return { short: 0 }; });
-    order.forEach(function (i) {
-      var left = players[i].points;
-      CANDY.forEach(function (c) {
-        var take = Math.min(pool[c.key], Math.floor(left / c.value));
-        out[i][c.key] = take;
-        pool[c.key] -= take;
-        left -= take * c.value;
-      });
-      out[i].short = left;   // 0 unless the table ran out of small change
-    });
-    return out;
-  }
+  const Q = root.Q;
+  const LOOSE = 1e-6;
 
   /* ------------------------------------------------------------------ *
    * Cards
    * ------------------------------------------------------------------ */
 
-  var CARDS = {
-    FLIP: {
-      id: 'FLIP', name: 'Flip', gate: 'X', arity: 1,
-      blurb: 'Turns a settled coin over. A spinning coin shrugs it off.'
-    },
-    HAUNT: {
-      id: 'HAUNT', name: 'Haunt', gate: 'H', arity: 1,
-      blurb: 'Sets a settled coin spinning — or stops one that already is.'
-    },
-    SUMMON: {
-      id: 'SUMMON', name: 'Summon', gate: 'ZH', arity: 1,
-      blurb: 'Catches a clockwise spin and pins it on 1. Your best card.'
-    },
-    BIND: {
-      id: 'BIND', name: 'Bind', gate: 'CX', arity: 2,
-      blurb: 'Links two coins so they settle together — or breaks a link.'
-    },
-    OBSERVER: {
-      id: 'OBSERVER', name: 'Observer', gate: 'measure', arity: 1, rare: true,
-      blurb: 'Collapses one coin on every board at the table. Including yours.'
-    }
+  const CARDS = {
+    X:  { id: 'X',  name: 'Flip',     gate: 'X',    arity: 1,
+          blurb: 'Turns 0 into 1 and 1 into 0. A spinning coin ignores it.' },
+    H:  { id: 'H',  name: 'Spin',     gate: 'H',    arity: 1,
+          blurb: 'Spins a settled coin. Stops a spinning one: + lands on 0, − lands on 1.' },
+    Z:  { id: 'Z',  name: 'Twist',    gate: 'Z',    arity: 1,
+          blurb: 'Turns a + spin into − and back. Does nothing to a settled coin.' },
+    CX: { id: 'CX', name: 'Link',     gate: 'CNOT', arity: 2,
+          blurb: 'If the first coin is 1, flips the second. If it is spinning, links the two.' },
+    M:  { id: 'M',  name: 'Collapse', gate: 'measure', arity: 1,
+          blurb: 'Lands a spinning coin right now, on your board. You can still play on it.' }
   };
+  const CARD_ORDER = ['X', 'H', 'Z', 'CX', 'M'];
 
-  var CARD_IDS = ['FLIP', 'HAUNT', 'SUMMON', 'BIND', 'OBSERVER'];
-  var COMMON_IDS = ['FLIP', 'HAUNT', 'SUMMON', 'BIND'];
+  /** How many of each card go in the deck for n seats. */
+  function deckFor(n) {
+    const deck = [];
+    const counts = { X: n, H: n, Z: Math.max(1, Math.round(n * 0.75)), CX: n, M: Math.ceil(n / 2) };
+    CARD_ORDER.forEach((id) => { for (let i = 0; i < counts[id]; i++) deck.push(id); });
+    return deck;
+  }
 
-  // How often the single Observer is shuffled into the deck at all. Low
-  // enough that seeing one is an event; high enough that a table will meet it
-  // a handful of times in an evening.
-  var OBSERVER_ODDS = 0.22;
-
-  function applyCard(state, cardId, targets) {
-    switch (cardId) {
-      case 'FLIP':   state.x(targets[0]); break;
-      case 'HAUNT':  state.h(targets[0]); break;
-      case 'SUMMON': state.zh(targets[0]); break;
-      case 'BIND':   state.cx(targets[0], targets[1]); break;
-      case 'OBSERVER':
-        throw new Error('Observer reaches every board; play it through Game.playCard');
-      default: throw new Error('unknown card ' + cardId);
+  /** Apply a card to a board. Collapse needs an rng and returns the bit. */
+  function applyCard(state, id, targets, rng) {
+    switch (id) {
+      case 'X':  state.x(targets[0]); return null;
+      case 'H':  state.h(targets[0]); return null;
+      case 'Z':  state.z(targets[0]); return null;
+      case 'CX': state.cx(targets[0], targets[1]); return null;
+      case 'M':  return state.collapse(targets[0], rng);
+      default: throw new Error('unknown card ' + id);
     }
   }
 
-  /** How a single coin ends up, in words a first-timer can act on. */
+  const KIND_WORDS = { one: 'lands on 1', zero: 'lands on 0', plus: 'spins +', minus: 'spins −', mixed: 'stays 50/50' };
+
   function coinPhrase(state, q) {
-    var kind = Q.readCoin(state, q).kind;
-    var n = q + 1;
-    if (kind === 'up') return 'settles coin ' + n + ' on 1';
-    if (kind === 'down') return 'settles coin ' + n + ' on 0';
-    if (kind === 'cw') return 'sets coin ' + n + ' spinning ↻';
-    if (kind === 'ccw') return 'sets coin ' + n + ' spinning ↺';
-    return 'leaves coin ' + n + ' at even odds';
+    return 'coin ' + (q + 1) + ' ' + KIND_WORDS[Q.readCoin(state, q).kind];
   }
 
-  function pairIsChained(state, a, b) {
-    return Q.findChains(state).some(function (c) {
-      return (c.a === a && c.b === b) || (c.a === b && c.b === a);
-    });
+  function isLinked(state, a, b) {
+    return Q.findLinks(state).some((l) => (l.a === a && l.b === b) || (l.a === b && l.b === a));
   }
 
-  /** What this card would do here, in plain words. */
-  function previewCard(state, cardId, targets, revealed) {
-    var card = CARDS[cardId];
+  /** What a card would do here, in plain words, before you commit. */
+  function previewCard(state, id, targets, upTo) {
+    const card = CARDS[id];
     if (targets.length < card.arity) return null;
-    if (cardId === 'OBSERVER') {
-      var p = state.probOne(targets[0]);
+    if (card.arity === 2 && targets[0] === targets[1]) return null;
+    const before = Q.expectedScore(state, upTo);
+
+    if (id === 'M') {
+      const p = state.probOne(targets[0]);
+      const settled = p < LOOSE || p > 1 - LOOSE;
+      const link = Q.findLinks(state).find((l) => l.a === targets[0] || l.b === targets[0]);
       return {
-        text: p > 1 - 1e-6 ? 'banks coin ' + (targets[0] + 1) + ' and puts everyone else to the toss'
-            : p < 1e-6 ? 'settles coin ' + (targets[0] + 1) + ' as a nought, everywhere'
-            : 'tosses coin ' + (targets[0] + 1) + ' for the whole table',
-        delta: 0, state: state.clone(), global: true
+        text: settled ? 'coin ' + (targets[0] + 1) + ' is already settled — nothing happens'
+          : 'coin ' + (targets[0] + 1) + ' lands now: ' + Math.round(p * 100) + '% chance of a 1'
+            + (link ? ', and its linked partner lands with it' : ''),
+        delta: 0, noop: settled, state: state.clone()
       };
     }
-    var before = Q.expectedScore(state, revealed);
-    var after = state.clone();
-    applyCard(after, cardId, targets);
-    var delta = Q.expectedScore(after, revealed) - before;
 
-    var text;
+    const after = state.clone();
+    applyCard(after, id, targets);
+    const delta = Q.expectedScore(after, upTo) - before;
+    const changed = !state.same(after);
+    let text;
     if (card.arity === 1) {
-      text = coinPhrase(after, targets[0]);
+      text = changed ? coinPhrase(after, targets[0]) : 'nothing changes';
     } else {
-      var wasChained = pairIsChained(state, targets[0], targets[1]);
-      var nowChained = pairIsChained(after, targets[0], targets[1]);
-      if (nowChained && !wasChained) {
-        text = 'links coins ' + (targets[0] + 1) + ' and ' + (targets[1] + 1);
-      } else if (wasChained && !nowChained) {
-        text = 'breaks the link on ' + (targets[0] + 1) + ' and ' + (targets[1] + 1);
-      } else {
-        // A Bind with a settled control is just a conditional flip of the
-        // target — say what actually happens to it.
-        text = coinPhrase(after, targets[1]);
-      }
+      const was = isLinked(state, targets[0], targets[1]);
+      const now = isLinked(after, targets[0], targets[1]);
+      if (now && !was) text = 'coins ' + (targets[0] + 1) + ' and ' + (targets[1] + 1) + ' become linked';
+      else if (was && !now) text = 'the link between ' + (targets[0] + 1) + ' and ' + (targets[1] + 1) + ' breaks';
+      else if (!changed) text = 'nothing changes';
+      else text = coinPhrase(after, targets[1]) + (Q.readCoin(after, targets[0]).kind !== Q.readCoin(state, targets[0]).kind
+        ? ', ' + coinPhrase(after, targets[0]) : '');
     }
-    return { text: text, delta: delta, state: after };
+    return { text, delta, noop: !changed, state: after };
+  }
+
+  function describePlay(id, targets) {
+    return CARDS[id].name + ' ' + targets.map((t) => t + 1).join('→');
   }
 
   /* ------------------------------------------------------------------ *
-   * Hand ranks
+   * Planning: the best way to spend a hand of cards on a board
    * ------------------------------------------------------------------ */
 
-  var RANKS = ['Null', 'Spark', 'Pair', 'Cascade', 'Surge', 'Coherence'];
+  const SINGLES = {}, PAIRS = {};
+  function singles(n) {
+    if (!SINGLES[n]) SINGLES[n] = Q.range(n).map((i) => [i]);
+    return SINGLES[n];
+  }
+  function pairs(n) {
+    if (!PAIRS[n]) {
+      PAIRS[n] = [];
+      for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) if (i !== j) PAIRS[n].push([i, j]);
+    }
+    return PAIRS[n];
+  }
+
+  /**
+   * Exhaustive search over every order and target of the cards in `hand`,
+   * counting only the first `upTo` coins. Collapse branches on both outcomes,
+   * weighted by their probability. Returns the expected score and the first
+   * play of the best line (null when playing nothing is best).
+   *
+   * Worst case is three Link cards: 20³ leaves of a 32-amplitude state.
+   * A phone does that in a few milliseconds.
+   */
+  function plan(state, hand, upTo) {
+    const n = upTo === undefined ? state.n : upTo;
+
+    /** The kicker: how the board reads as a binary number, coin 1 highest. */
+    function kicker(st) {
+      let k = 0;
+      for (let q = 0; q < n; q++) k += st.probOne(q) * Math.pow(2, n - 1 - q);
+      return k / Math.pow(2, n);
+    }
+
+    // A line is better when it expects more coins on 1; among equals, the one
+    // that spends fewer cards (so the hint never opens with busywork); among
+    // those, the one that lands its 1s further left, matching the tie rule.
+    function better(v, u, k, best) {
+      if (v > best.value + 1e-9) return true;
+      if (v < best.value - 1e-9) return false;
+      if (u < best.used - 1e-9) return true;
+      if (u > best.used + 1e-9) return false;
+      return k > best.kicker + 1e-9;
+    }
+
+    function best(st, cards) {
+      const out = { value: Q.expectedScore(st, n), first: null, used: 0, kicker: kicker(st) };
+      const seen = new Set();
+      cards.forEach((id, idx) => {
+        if (seen.has(id)) return;
+        seen.add(id);
+        const rest = cards.slice(); rest.splice(idx, 1);
+        const targetSets = CARDS[id].arity === 1 ? singles(n) : pairs(n);
+        for (const t of targetSets) {
+          let v, u, k;
+          if (id === 'M') {
+            const p1 = st.probOne(t[0]);
+            if (p1 < LOOSE || p1 > 1 - LOOSE) continue;
+            const s1 = st.clone(); s1.project(t[0], 1);
+            const s0 = st.clone(); s0.project(t[0], 0);
+            const b1 = best(s1, rest), b0 = best(s0, rest);
+            v = p1 * b1.value + (1 - p1) * b0.value;
+            u = 1 + p1 * b1.used + (1 - p1) * b0.used;
+            k = p1 * b1.kicker + (1 - p1) * b0.kicker;
+          } else {
+            const s = st.clone();
+            applyCard(s, id, t);
+            if (s.same(st)) continue;           // a play that changes nothing is never needed
+            const b = best(s, rest);
+            v = b.value; u = 1 + b.used; k = b.kicker;
+          }
+          if (better(v, u, k, out)) { out.value = v; out.used = u; out.kicker = k; out.first = { card: id, targets: t }; }
+        }
+      });
+      return out;
+    }
+    return best(state, hand.slice());
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Hand ranks and pots
+   * ------------------------------------------------------------------ */
+
+  const RANKS = ['Blank', 'One', 'Pair', 'Trips', 'Quads', 'Coherence'];
+  const STREETS = ['Deal', 'Flop', 'Turn', 'River'];
+
+  /**
+   * Most coins on 1 wins. Tied counts go to whoever has a 1 further left —
+   * coin 1 is the ace — so the five coins read like a hand with a kicker.
+   * Identical boards split the pot.
+   */
+  function rankKey(bits) {
+    let value = 0;
+    bits.forEach((b, i) => { value += b << (bits.length - 1 - i); });
+    return bits.reduce((a, b) => a + b, 0) * (1 << bits.length) + value;
+  }
 
   function rankName(score) {
     return RANKS[Math.max(0, Math.min(RANKS.length - 1, score))];
   }
 
-  /* ------------------------------------------------------------------ *
-   * Side pots
-   * ------------------------------------------------------------------ */
-
-  /**
-   * Split everything committed this hand into a main pot and any side pots.
-   * Each pot records which seats are allowed to win it.
-   */
+  /** Main pot plus side pots, each with the seats allowed to win it. */
   function buildPots(players) {
-    var levels = [];
-    players.forEach(function (p) {
-      if (p.committed > 0 && levels.indexOf(p.committed) === -1) levels.push(p.committed);
-    });
-    levels.sort(function (a, b) { return a - b; });
-
-    var pots = [], prev = 0;
-    levels.forEach(function (lvl) {
-      var amount = 0, eligible = [];
-      players.forEach(function (p, i) {
+    const levels = [];
+    players.forEach((p) => { if (p.committed > 0 && !levels.includes(p.committed)) levels.push(p.committed); });
+    levels.sort((a, b) => a - b);
+    const pots = [];
+    let prev = 0;
+    levels.forEach((lvl) => {
+      let amount = 0;
+      const eligible = [];
+      players.forEach((p, i) => {
         amount += Math.min(p.committed, lvl) - Math.min(p.committed, prev);
         if (p.committed >= lvl && !p.folded) eligible.push(i);
       });
-      if (amount > 0) pots.push({ amount: amount, eligible: eligible });
+      if (amount > 0) pots.push({ amount, eligible });
       prev = lvl;
     });
     return pots;
@@ -224,492 +228,363 @@
    * Game
    * ------------------------------------------------------------------ */
 
-  var ROUND_NAMES = ['The Deal', 'The Reveal', 'The Turn', 'The Collapse'];
-
-  function Game(opts) {
-    this.seed = (opts.seed === undefined || opts.seed === null) ? (Date.now() & 0x7fffffff) : opts.seed;
-    this.rng = Q.mulberry32(this.seed);
-    this.baseBlind = opts.smallBlind || 5;
-    this.handsPerLevel = opts.handsPerLevel || 6;
-    this.blindLevel = 0;
-    this.smallBlind = this.baseBlind;
-    this.bigBlind = this.smallBlind * 2;
-    this.coins = opts.coins || 5;
-    this.handNo = 0;
-    this.dealer = 0;
-    this.log = [];
-
-    var self = this;
-    this.players = opts.players.map(function (p, i) {
-      return {
-        seat: i,
-        name: p.name,
-        sigil: p.sigil,
-        points: stashValue(STARTING_STASH),
-        startPoints: stashValue(STARTING_STASH),
-        bet: 0, committed: 0,
+  class Game {
+    /**
+     * seats: [{ name, avatar, bot }]  — bot is a persona object or null.
+     * seed:  any integer. Every hand's board and deck come from the seed and
+     *        the hand number alone, so a Daily Deal is the same for everyone
+     *        no matter how they play it.
+     */
+    constructor(opts) {
+      this.seed = (opts.seed === undefined || opts.seed === null) ? (Date.now() & 0x7fffffff) : opts.seed >>> 0;
+      this.rng = Q.mulberry32(Q.mix(this.seed, 0xC0FFEE));   // measurement + bot dice
+      this.startChips = opts.startChips || 1000;
+      this.baseBlind = opts.smallBlind || 10;
+      this.handsPerLevel = opts.handsPerLevel || 5;
+      this.maxHands = opts.maxHands || 0;
+      this.coins = opts.coins || 5;
+      this.handNo = 0;
+      this.dealer = 0;
+      this.log = [];
+      this.history = [];
+      this.players = opts.seats.map((s, i) => ({
+        seat: i, name: s.name, avatar: s.avatar || 0, bot: s.bot || null,
+        chips: this.startChips, bet: 0, committed: 0,
         folded: false, allIn: false, acted: false, out: false,
-        hand: {}, board: null, score: null, bits: null, won: 0
-      };
-    });
-    this.n = this.players.length;
-    this.startHand();
-  }
-
-  Game.prototype.live = function () {
-    return this.players.filter(function (p) { return !p.out; });
-  };
-
-  Game.prototype.inHand = function () {
-    return this.players.filter(function (p) { return !p.out && !p.folded; });
-  };
-
-  Game.prototype.canAct = function (p) {
-    return !p.out && !p.folded && !p.allIn && p.points > 0;
-  };
-
-  /* ---- setting up a hand ---- */
-
-  Game.prototype.startHand = function () {
-    var self = this;
-    this.handNo++;
-    // The blinds climb so an evening of this actually finishes. Without it,
-    // a table of cautious players just passes the same candy around forever.
-    this.blindLevel = Math.min(5, Math.floor((this.handNo - 1) / this.handsPerLevel));
-    this.smallBlind = this.baseBlind * Math.pow(2, this.blindLevel);
-    this.bigBlind = this.smallBlind * 2;
-    this.phase = 'betting';
-    this.round = 0;
-    this.revealed = 0;
-    this.pots = [];
-    this.results = null;
-    this.message = '';
-
-    var origin = Q.dealBoard(this.rng, this.coins);
-    this.players.forEach(function (p) {
-      p.bet = 0; p.committed = 0; p.won = 0;
-      p.folded = p.out; p.allIn = false; p.acted = false;
-      p.score = null; p.bits = null;
-      p.board = origin.clone();
-      p.hand = {};
-    });
-
-    this.dealCards();
-
-    // Blinds: the dealer seat posts the small blind, the next seat the big.
-    var seats = this.liveSeats();
-    var sb = seats[0], bb = seats[1 % seats.length];
-    this.sbSeat = sb; this.bbSeat = bb;
-    this.forceBet(sb, this.smallBlind);
-    this.forceBet(bb, this.bigBlind);
-
-    this.currentBet = this.bigBlind;
-    this.minRaise = this.bigBlind;
-    this.lastAggressor = bb;
-
-    // Heads-up: two seats, so index 2 wraps back to the dealer, who is first
-    // to act before the flop. That is the correct heads-up rule.
-    this.actor = seats[2 % seats.length];
-    if (!this.canAct(this.players[this.actor])) this.actor = this.nextActor(this.actor);
-    this.note(ROUND_NAMES[0] + ' — blinds are ' + this.smallBlind + '/' + this.bigBlind + '.');
-
-    // Big blinds late in the game can put everyone all in before anyone acts.
-    // Nothing left to bet: turn the coins over and go straight to the cards.
-    if (this.actor < 0) this.closeRound();
-  };
-
-  /** Seats still in the game, ordered starting from the dealer. */
-  Game.prototype.liveSeats = function () {
-    var out = [], k, i;
-    for (k = 0; k < this.n; k++) {
-      i = (this.dealer + k) % this.n;
-      if (!this.players[i].out) out.push(i);
+        hand: [], board: null, plays: [], bits: null, score: null, won: 0,
+        handsWon: 0
+      }));
+      this.n = this.players.length;
+      this.startHand();
     }
-    return out;
-  };
 
-  /** Three cards each, drawn from a shared deck of four of each type. */
-  Game.prototype.dealCards = function () {
-    var seats = this.liveSeats();
-    var deck = [], i, c;
-    for (i = 0; i < COMMON_IDS.length; i++) {
-      for (c = 0; c < seats.length; c++) deck.push(COMMON_IDS[i]);
+    /* ---- queries ---- */
+
+    live() { return this.players.filter((p) => !p.out); }
+    inHand() { return this.players.filter((p) => !p.out && !p.folded); }
+    humans() { return this.players.filter((p) => !p.bot); }
+    canAct(p) { return !p.out && !p.folded && !p.allIn && p.chips > 0; }
+    potTotal() { return this.players.reduce((s, p) => s + p.committed, 0); }
+    street() { return this.phase === 'gates' ? 'Play your cards' : this.phase === 'betting' ? STREETS[this.round] : 'Showdown'; }
+    current() { return this.actor >= 0 ? this.players[this.actor] : null; }
+
+    /** Seats still in the game, starting from the dealer. */
+    liveSeats() {
+      const out = [];
+      for (let k = 0; k < this.n; k++) {
+        const i = (this.dealer + k) % this.n;
+        if (!this.players[i].out) out.push(i);
+      }
+      return out;
     }
-    // At most one Observer exists, and most hands do not contain it.
-    this.observerInDeck = this.rng() < OBSERVER_ODDS;
-    if (this.observerInDeck) deck.push('OBSERVER');
 
-    Q.shuffle(deck, this.rng);
-    var self = this;
-    for (i = 0; i < 3; i++) {
-      seats.forEach(function (s) {
-        var card = deck.pop();
-        var hand = self.players[s].hand;
-        hand[card] = (hand[card] || 0) + 1;
+    note(text) {
+      this.message = text;
+      this.log.push(text);
+      if (this.log.length > 80) this.log.shift();
+    }
+
+    /* ---- starting a hand ---- */
+
+    startHand() {
+      this.handNo++;
+      this.blindLevel = Math.min(6, Math.floor((this.handNo - 1) / this.handsPerLevel));
+      this.smallBlind = this.baseBlind * Math.pow(2, this.blindLevel);
+      this.bigBlind = this.smallBlind * 2;
+      this.phase = 'betting';
+      this.round = 0;
+      this.revealed = 0;
+      this.results = null;
+      this.lastCollapse = null;
+
+      const dealRng = Q.mulberry32(Q.mix(this.seed, this.handNo));
+      this.origin = Q.dealBoard(dealRng, this.coins);
+      this.players.forEach((p) => {
+        p.bet = 0; p.committed = 0; p.won = 0;
+        p.folded = p.out; p.allIn = false; p.acted = false;
+        p.score = null; p.bits = null; p.plays = [];
+        p.board = this.origin.clone();
+        p.hand = [];
       });
+      this.dealCards(dealRng);
+
+      // Blinds sit left of the dealer. Heads-up, the dealer posts the small
+      // blind and acts first before the flop; after it, the other seat does.
+      const seats = this.liveSeats();
+      const hu = seats.length === 2;
+      const sb = hu ? seats[0] : seats[1], bb = hu ? seats[1] : seats[2];
+      this.sbSeat = sb; this.bbSeat = bb;
+      this.forceBet(sb, this.smallBlind);
+      this.forceBet(bb, this.bigBlind);
+      this.currentBet = this.bigBlind;
+      this.minRaise = this.bigBlind;
+
+      this.actor = hu ? seats[0] : seats[3 % seats.length];
+      if (!this.canAct(this.players[this.actor])) this.actor = this.nextActor(this.actor);
+      this.note('Hand ' + this.handNo + ' — blinds ' + this.smallBlind + '/' + this.bigBlind + '.');
+      if (this.actor < 0) this.closeRound();
     }
-    this.deckCounts = {};
-    COMMON_IDS.forEach(function (id) { self.deckCounts[id] = seats.length; });
-    this.deckCounts.OBSERVER = this.observerInDeck ? 1 : 0;
-  };
 
-  Game.prototype.note = function (text) {
-    this.message = text;
-    this.log.push(text);
-    if (this.log.length > 60) this.log.shift();
-  };
-
-  /* ---- betting ---- */
-
-  Game.prototype.forceBet = function (seat, amount) {
-    var p = this.players[seat];
-    var pay = Math.min(amount, p.points);
-    p.points -= pay;
-    p.bet += pay;
-    p.committed += pay;
-    if (p.points === 0) p.allIn = true;
-    return pay;
-  };
-
-  Game.prototype.toCall = function (seat) {
-    var p = this.players[seat];
-    return Math.max(0, Math.min(this.currentBet - p.bet, p.points));
-  };
-
-  Game.prototype.minRaiseTo = function (seat) {
-    var p = this.players[seat];
-    return Math.min(this.currentBet + this.minRaise, p.bet + p.points);
-  };
-
-  Game.prototype.fold = function () {
-    if (this.phase !== 'betting') return;
-    var p = this.players[this.actor];
-    p.folded = true;
-    p.acted = true;
-    this.note(p.name + ' folds.');
-    this.afterAction();
-  };
-
-  Game.prototype.call = function () {
-    if (this.phase !== 'betting') return;
-    var seat = this.actor, p = this.players[seat];
-    var amount = this.toCall(seat);
-    this.forceBet(seat, amount);
-    p.acted = true;
-    this.note(amount === 0 ? p.name + ' checks.' : p.name + (p.allIn ? ' calls all in for ' : ' calls ') + amount + '.');
-    this.afterAction();
-  };
-
-  /** Raise the total bet to `to` points. */
-  Game.prototype.raiseTo = function (to) {
-    if (this.phase !== 'betting') return { ok: false, why: 'not betting' };
-    var seat = this.actor, p = this.players[seat];
-    var max = p.bet + p.points;
-    to = Math.round(to);
-    if (to > max) return { ok: false, why: 'You only have ' + max + '.' };
-    var isAllIn = to === max;
-    if (!isAllIn && to < this.currentBet + this.minRaise) {
-      return { ok: false, why: 'Raise to at least ' + (this.currentBet + this.minRaise) + ', or shove all in.' };
+    /** Three cards each from a shared deck; the leftovers stay hidden. */
+    dealCards(rng) {
+      const seats = this.liveSeats();
+      const deck = Q.shuffle(deckFor(seats.length), rng);
+      for (let i = 0; i < 3; i++) seats.forEach((s) => { this.players[s].hand.push(deck.pop()); });
+      this.players.forEach((p) => { p.hand.sort((a, b) => CARD_ORDER.indexOf(a) - CARD_ORDER.indexOf(b)); });
     }
-    var add = to - p.bet;
-    this.forceBet(seat, add);
-    if (p.bet > this.currentBet) {
-      this.minRaise = Math.max(this.minRaise, p.bet - this.currentBet);
-      this.currentBet = p.bet;
-      this.lastAggressor = seat;
-      // A raise reopens the action for everyone else.
-      this.players.forEach(function (q) { if (q.seat !== seat) q.acted = false; });
+
+    /* ---- betting ---- */
+
+    forceBet(seat, amount) {
+      const p = this.players[seat];
+      const pay = Math.min(amount, p.chips);
+      p.chips -= pay; p.bet += pay; p.committed += pay;
+      if (p.chips === 0) p.allIn = true;
+      return pay;
     }
-    p.acted = true;
-    this.note(p.name + (p.allIn ? ' shoves all in for ' : ' raises to ') + p.bet + '.');
-    this.afterAction();
-    return { ok: true };
-  };
 
-  Game.prototype.nextActor = function (from) {
-    var k, i, p;
-    for (k = 1; k <= this.n; k++) {
-      i = (from + k) % this.n;
-      p = this.players[i];
-      if (this.canAct(p) && (!p.acted || p.bet < this.currentBet)) return i;
+    toCall(seat) {
+      const p = this.players[seat];
+      return Math.max(0, Math.min(this.currentBet - p.bet, p.chips));
     }
-    return -1;
-  };
 
-  Game.prototype.afterAction = function () {
-    if (this.inHand().length <= 1) { this.endHandUncontested(); return; }
-    var next = this.nextActor(this.actor);
-    if (next < 0) { this.closeRound(); return; }
-    this.actor = next;
-  };
+    minRaiseTo(seat) {
+      const p = this.players[seat];
+      return Math.min(this.currentBet + this.minRaise, p.bet + p.chips);
+    }
 
-  Game.prototype.closeRound = function () {
-    this.players.forEach(function (p) { p.bet = 0; p.acted = false; });
-    this.currentBet = 0;
-    this.minRaise = this.bigBlind;
+    maxRaiseTo(seat) {
+      const p = this.players[seat];
+      return p.bet + p.chips;
+    }
 
-    while (this.round < 3) {
-      this.round++;
-      this.revealed = this.round === 1 ? 3 : this.revealed + 1;
-      // If nobody can still bet, just keep turning coins over.
-      if (this.playersWhoCanBet() >= 2) {
-        this.actor = this.firstToAct();
-        if (this.actor >= 0) {
-          this.note(ROUND_NAMES[this.round] + ' — ' + this.revealed + ' coins on the table.');
-          return;
-        }
+    fold() {
+      if (this.phase !== 'betting') return false;
+      const p = this.players[this.actor];
+      p.folded = true; p.acted = true;
+      this.note(p.name + ' folds.');
+      this.afterAction();
+      return true;
+    }
+
+    call() {
+      if (this.phase !== 'betting') return false;
+      const seat = this.actor, p = this.players[seat];
+      const amount = this.toCall(seat);
+      this.forceBet(seat, amount);
+      p.acted = true;
+      this.note(amount === 0 ? p.name + ' checks.' : p.name + (p.allIn ? ' calls all in for ' : ' calls ') + amount + '.');
+      this.afterAction();
+      return true;
+    }
+
+    /** Raise the total bet this street to `to`. */
+    raiseTo(to) {
+      if (this.phase !== 'betting') return { ok: false, why: 'not betting' };
+      const seat = this.actor, p = this.players[seat];
+      const max = p.bet + p.chips;
+      to = Math.round(to);
+      if (to > max) return { ok: false, why: 'You only have ' + max + '.' };
+      const allIn = to === max;
+      if (!allIn && to < this.currentBet + this.minRaise) {
+        return { ok: false, why: 'Raise to at least ' + (this.currentBet + this.minRaise) + ', or go all in.' };
       }
-    }
-    this.startGatePhase();
-  };
-
-  Game.prototype.playersWhoCanBet = function () {
-    var self = this;
-    return this.players.filter(function (p) { return self.canAct(p); }).length;
-  };
-
-  Game.prototype.firstToAct = function () {
-    var seats = this.liveSeats(), i;
-    for (i = 0; i < seats.length; i++) {
-      if (this.canAct(this.players[seats[i]])) return seats[i];
-    }
-    return -1;
-  };
-
-  /* ---- playing cards on the coins ---- */
-
-  Game.prototype.startGatePhase = function () {
-    this.phase = 'gates';
-    this.revealed = this.coins;
-    var seats = this.liveSeats(), i;
-    this.actor = -1;
-    for (i = 0; i < seats.length; i++) {
-      if (!this.players[seats[i]].folded) { this.actor = seats[i]; break; }
-    }
-    if (this.actor < 0) { this.showdown(); return; }
-    this.note('Cards on the coins. ' + this.players[this.actor].name + ' first.');
-  };
-
-  Game.prototype.handSize = function (seat) {
-    var h = this.players[seat].hand, k, n = 0;
-    for (k in h) if (h.hasOwnProperty(k)) n += h[k];
-    return n;
-  };
-
-  Game.prototype.playCard = function (cardId, targets) {
-    if (this.phase !== 'gates') return { ok: false, why: 'not the card phase' };
-    var p = this.players[this.actor];
-    if (!p.hand[cardId]) return { ok: false, why: 'no ' + CARDS[cardId].name + ' in hand' };
-    var card = CARDS[cardId];
-    if (targets.length !== card.arity) return { ok: false, why: 'pick ' + card.arity + ' coin(s)' };
-    if (card.arity === 2 && targets[0] === targets[1]) return { ok: false, why: 'pick two different coins' };
-
-    var outcome = null;
-    if (cardId === 'OBSERVER') outcome = this.observe(targets[0]);
-    else applyCard(p.board, cardId, targets);
-
-    p.hand[cardId]--;
-    if (p.hand[cardId] === 0) delete p.hand[cardId];
-    return { ok: true, outcome: outcome };
-  };
-
-  /**
-   * The Observer: measure one coin on every board still in the hand at once.
-   *
-   * Each player holds their own copy of the board, so each copy collapses
-   * according to its own amplitudes — a coin someone has already pinned stays
-   * pinned, while anyone still holding it in superposition gets a coin toss
-   * and no way back. Chains break with it.
-   */
-  Game.prototype.observe = function (q) {
-    var self = this;
-    var results = [];
-    this.players.forEach(function (p) {
-      if (p.out || p.folded) return;
-      var before = p.board.probOne(q);
-      var bit = p.board.collapse(q, self.rng);
-      results.push({ seat: p.seat, name: p.name, bit: bit, wasCertain: before > 1 - 1e-6 || before < 1e-6 });
-    });
-
-    var won = results.filter(function (r) { return r.bit === 1; }).length;
-    this.lastObservation = { coin: q, results: results, by: this.actor };
-    this.note(this.players[this.actor].name + ' plays the Observer on coin ' + (q + 1) +
-      ' — it collapses on every board. ' + won + ' of ' + results.length + ' came up 1.');
-    return this.lastObservation;
-  };
-
-  Game.prototype.endTurn = function () {
-    if (this.phase !== 'gates') return;
-    var seats = this.liveSeats();
-    var at = seats.indexOf(this.actor), i, s;
-    for (i = at + 1; i < seats.length; i++) {
-      s = seats[i];
-      if (!this.players[s].folded) { this.actor = s; return; }
-    }
-    this.showdown();
-  };
-
-  /**
-   * The best single card you could still play, by expected coins face-up.
-   * Used by the Hint button; beginners lean on it, everyone else ignores it.
-   */
-  Game.prototype.bestPlay = function (seat) {
-    var p = this.players[seat], best = null, cardId, i, j, pv;
-
-    // The Observer never changes your own expected score, so the usual search
-    // would never suggest it. Its worth is what it takes away from everyone
-    // else: play it on a coin you have already pinned and they have not.
-    if (p.hand.OBSERVER) {
-      var pick = null;
-      for (i = 0; i < this.coins; i++) {
-        if (p.board.probOne(i) < 1 - 1e-6) continue;
-        var exposed = 0;
-        this.players.forEach(function (o) {
-          if (o.out || o.folded || o.seat === seat) return;
-          if (o.board.probOne(i) < 1 - 1e-6) exposed++;
-        });
-        if (exposed && (!pick || exposed > pick.exposed)) pick = { i: i, exposed: exposed };
+      if (to <= p.bet) return { ok: false, why: 'That is not a raise.' };
+      this.forceBet(seat, to - p.bet);
+      if (p.bet > this.currentBet) {
+        this.minRaise = Math.max(this.minRaise, p.bet - this.currentBet);
+        this.currentBet = p.bet;
+        this.players.forEach((q) => { if (q.seat !== seat) q.acted = false; });
       }
-      if (pick) {
-        return {
-          card: 'OBSERVER', targets: [pick.i], delta: pick.exposed,
-          text: 'banks coin ' + (pick.i + 1) + ' and leaves ' + pick.exposed +
-                ' other' + (pick.exposed > 1 ? 's' : '') + ' to the toss'
-        };
-      }
+      p.acted = true;
+      this.note(p.name + (p.allIn ? ' goes all in for ' : ' raises to ') + p.bet + '.');
+      this.afterAction();
+      return { ok: true };
     }
 
-    for (cardId in p.hand) {
-      if (!p.hand.hasOwnProperty(cardId)) continue;
-      if (cardId === 'OBSERVER') continue;
-      var arity = CARDS[cardId].arity;
-      for (i = 0; i < this.coins; i++) {
-        if (arity === 1) {
-          pv = previewCard(p.board, cardId, [i], this.coins);
-          if (pv && (!best || pv.delta > best.delta)) best = { card: cardId, targets: [i], delta: pv.delta, text: pv.text };
-        } else {
-          for (j = 0; j < this.coins; j++) {
-            if (i === j) continue;
-            pv = previewCard(p.board, cardId, [i, j], this.coins);
-            if (pv && (!best || pv.delta > best.delta)) best = { card: cardId, targets: [i, j], delta: pv.delta, text: pv.text };
+    nextActor(from) {
+      for (let k = 1; k <= this.n; k++) {
+        const i = (from + k) % this.n, p = this.players[i];
+        if (this.canAct(p) && (!p.acted || p.bet < this.currentBet)) return i;
+      }
+      return -1;
+    }
+
+    afterAction() {
+      if (this.inHand().length <= 1) { this.endHandUncontested(); return; }
+      const next = this.nextActor(this.actor);
+      if (next < 0) { this.closeRound(); return; }
+      this.actor = next;
+    }
+
+    closeRound() {
+      this.players.forEach((p) => { p.bet = 0; p.acted = false; });
+      this.currentBet = 0;
+      this.minRaise = this.bigBlind;
+      while (this.round < 3) {
+        this.round++;
+        this.revealed = this.round === 1 ? 3 : this.revealed + 1;
+        if (this.players.filter((p) => this.canAct(p)).length >= 2) {
+          this.actor = this.firstToAct();
+          if (this.actor >= 0) {
+            this.note(STREETS[this.round] + ' — ' + this.revealed + ' coins showing.');
+            return;
           }
         }
       }
+      this.startGatePhase();
     }
-    return best;
-  };
 
-  /* ---- finishing the hand ---- */
-
-  Game.prototype.endHandUncontested = function () {
-    var winner = this.inHand()[0];
-    var total = this.players.reduce(function (s, p) { return s + p.committed; }, 0);
-    winner.points += total;
-    winner.won = total;
-    this.results = {
-      uncontested: true,
-      pots: [{ amount: total, winners: [winner.seat] }],
-      summary: winner.name + ' takes ' + total + ' — everyone else folded.'
-    };
-    this.phase = 'over';
-    this.note(this.results.summary);
-    this.settleBusts();
-  };
-
-  Game.prototype.showdown = function () {
-    var self = this;
-    this.phase = 'showdown';
-    this.revealed = this.coins;
-
-    this.players.forEach(function (p) {
-      if (p.folded || p.out) { p.score = null; p.bits = null; return; }
-      p.bits = p.board.measure(self.rng);
-      p.score = p.bits.reduce(function (a, b) { return a + b; }, 0);
-    });
-
-    var pots = buildPots(this.players);
-    var awarded = [];
-    pots.forEach(function (pot) {
-      var contenders = pot.eligible.filter(function (i) { return self.players[i].score !== null; });
-      if (!contenders.length) {
-        // Everyone eligible folded; hand it to whoever is left.
-        contenders = self.inHand().map(function (p) { return p.seat; });
+    /** After the flop the first live seat left of the dealer opens. */
+    firstToAct() {
+      const seats = this.liveSeats();
+      for (let k = 1; k <= seats.length; k++) {
+        const s = seats[k % seats.length];
+        if (this.canAct(this.players[s])) return s;
       }
-      var best = -1;
-      contenders.forEach(function (i) { if (self.players[i].score > best) best = self.players[i].score; });
-      var winners = contenders.filter(function (i) { return self.players[i].score === best; });
-      var share = Math.floor(pot.amount / winners.length);
-      var remainder = pot.amount - share * winners.length;
-      winners.forEach(function (i, k) {
-        var got = share + (k < remainder ? 1 : 0); // odd candy goes left of the dealer
-        self.players[i].points += got;
-        self.players[i].won += got;
+      return -1;
+    }
+
+    /* ---- playing cards ---- */
+
+    startGatePhase() {
+      this.phase = 'gates';
+      this.revealed = this.coins;
+      this.gateOrder = this.liveSeats().filter((s) => !this.players[s].folded);
+      this.gateIdx = 0;
+      this.actor = this.gateOrder.length ? this.gateOrder[0] : -1;
+      if (this.actor < 0) { this.showdown(); return; }
+      this.note('Everyone plays their cards on their own copy of the board.');
+    }
+
+    playCard(id, targets) {
+      if (this.phase !== 'gates') return { ok: false, why: 'not the card phase' };
+      const p = this.players[this.actor];
+      const idx = p.hand.indexOf(id);
+      if (idx < 0) return { ok: false, why: 'no ' + CARDS[id].name + ' in hand' };
+      const card = CARDS[id];
+      if (targets.length !== card.arity) return { ok: false, why: 'pick ' + card.arity + ' coin' + (card.arity > 1 ? 's' : '') };
+      if (card.arity === 2 && targets[0] === targets[1]) return { ok: false, why: 'pick two different coins' };
+
+      const preview = previewCard(p.board, id, targets, this.coins);
+      const outcome = applyCard(p.board, id, targets, this.rng);
+      p.hand.splice(idx, 1);
+      const play = { card: id, targets: targets.slice(), outcome };
+      p.plays.push(play);
+      if (id === 'M') this.lastCollapse = { seat: p.seat, coin: targets[0], bit: outcome };
+      return { ok: true, outcome, preview, play };
+    }
+
+    /** The best next play for a seat, or null if nothing helps. */
+    hint(seat) {
+      const p = this.players[seat];
+      const res = plan(p.board, p.hand, this.coins);
+      if (!res.first) return null;
+      const pv = previewCard(p.board, res.first.card, res.first.targets, this.coins);
+      return { card: res.first.card, targets: res.first.targets, text: pv ? pv.text : '', value: res.value };
+    }
+
+    endTurn() {
+      if (this.phase !== 'gates') return;
+      this.gateIdx++;
+      if (this.gateIdx < this.gateOrder.length) { this.actor = this.gateOrder[this.gateIdx]; return; }
+      this.showdown();
+    }
+
+    /* ---- finishing ---- */
+
+    endHandUncontested() {
+      const winner = this.inHand()[0];
+      const total = this.potTotal();
+      winner.chips += total; winner.won = total; winner.handsWon++;
+      this.results = {
+        uncontested: true,
+        pots: [{ amount: total, winners: [winner.seat], score: null }],
+        summary: winner.name + (winner.name === 'You' ? ' take ' : ' takes ') + total + ' — everyone else folded.'
+      };
+      this.finishHand();
+    }
+
+    showdown() {
+      this.phase = 'showdown';
+      this.revealed = this.coins;
+      this.players.forEach((p) => {
+        if (p.folded || p.out) { p.score = null; p.bits = null; return; }
+        p.bits = p.board.measure(this.rng);
+        p.score = p.bits.reduce((a, b) => a + b, 0);
+        p.rankKey = rankKey(p.bits);
       });
-      awarded.push({ amount: pot.amount, winners: winners, score: best });
-    });
 
-    this.pots = awarded;
-    this.results = { uncontested: false, pots: awarded, summary: this.describeResult(awarded) };
-    this.phase = 'over';
-    this.settleBusts();
+      const awarded = [];
+      buildPots(this.players).forEach((pot) => {
+        let contenders = pot.eligible.filter((i) => this.players[i].score !== null);
+        if (!contenders.length) contenders = this.inHand().map((p) => p.seat);
+        const bestKey = Math.max(...contenders.map((i) => this.players[i].rankKey));
+        const winners = contenders.filter((i) => this.players[i].rankKey === bestKey);
+        const best = this.players[winners[0]].score;
+        const share = Math.floor(pot.amount / winners.length);
+        const remainder = pot.amount - share * winners.length;
+        winners.forEach((i, k) => {
+          const got = share + (k < remainder ? 1 : 0);
+          this.players[i].chips += got; this.players[i].won += got;
+        });
+        awarded.push({ amount: pot.amount, winners, score: best });
+      });
+      const winnerSeats = new Set();
+      awarded.forEach((a) => a.winners.forEach((w) => winnerSeats.add(w)));
+      winnerSeats.forEach((s) => { this.players[s].handsWon++; });
+
+      this.results = { uncontested: false, pots: awarded, summary: this.describeResult(awarded) };
+      this.finishHand();
+    }
+
+    describeResult(awarded) {
+      const main = awarded[0];
+      if (!main) return 'No chips changed hands.';
+      const names = main.winners.map((i) => this.players[i].name);
+      const who = names.length === 1 ? names[0] : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
+      const total = awarded.reduce((s, a) => s + a.amount, 0);
+      const verb = names.length > 1 ? ' split ' : names[0] === 'You' ? ' win ' : ' wins ';
+      return who + verb + total + ' with ' + rankName(main.score) +
+        ' (' + main.score + ' coin' + (main.score === 1 ? '' : 's') + ' on 1).';
+    }
+
+    finishHand() {
+      this.phase = 'over';
+      this.note(this.results.summary);
+      this.players.forEach((p) => { if (!p.out && p.chips <= 0) { p.out = true; p.chips = 0; } });
+      this.history.push({
+        hand: this.handNo,
+        winners: this.results.pots[0].winners.slice(),
+        score: this.results.pots[0].score,
+        pot: this.results.pots.reduce((s, a) => s + a.amount, 0),
+        scores: this.players.map((p) => p.score)
+      });
+    }
+
+    /** Why the game is over, or null if it is not. */
+    finished() {
+      if (this.phase !== 'over') return null;
+      if (this.live().length <= 1) return 'last one standing';
+      if (this.humans().length && this.humans().every((p) => p.out)) return 'busted';
+      if (this.maxHands && this.handNo >= this.maxHands) return 'all hands played';
+      return null;
+    }
+
+    nextHand() {
+      if (this.finished()) return false;
+      do { this.dealer = (this.dealer + 1) % this.n; } while (this.players[this.dealer].out);
+      this.startHand();
+      return true;
+    }
+
+    standings() {
+      return this.players.slice().sort((a, b) => b.chips - a.chips);
+    }
+  }
+
+  root.Engine = {
+    Game, CARDS, CARD_ORDER, RANKS, STREETS,
+    deckFor, applyCard, previewCard, describePlay, plan, rankName, rankKey, buildPots
   };
-
-  Game.prototype.describeResult = function (awarded) {
-    var self = this;
-    var main = awarded[0];
-    if (!main) return 'No candy changed hands.';
-    var names = main.winners.map(function (i) { return self.players[i].name; });
-    var who = names.length === 1 ? names[0]
-      : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
-    var verb = names.length === 1 ? ' takes ' : ' split ';
-    var total = awarded.reduce(function (s, a) { return s + a.amount; }, 0);
-    return who + verb + total + ' with ' + rankName(main.score) + ' (' + main.score + ' face-up).';
-  };
-
-  Game.prototype.settleBusts = function () {
-    this.players.forEach(function (p) {
-      if (!p.out && p.points <= 0) { p.out = true; p.points = 0; }
-    });
-  };
-
-  Game.prototype.gameOver = function () {
-    return this.live().length <= 1;
-  };
-
-  Game.prototype.nextHand = function () {
-    if (this.gameOver()) return false;
-    do {
-      this.dealer = (this.dealer + 1) % this.n;
-    } while (this.players[this.dealer].out);
-    this.startHand();
-    return true;
-  };
-
-  /* ---- current pot total, for display ---- */
-
-  Game.prototype.potTotal = function () {
-    return this.players.reduce(function (s, p) { return s + p.committed; }, 0);
-  };
-
-  global.Engine = {
-    Game: Game,
-    CANDY: CANDY,
-    CARDS: CARDS,
-    CARD_IDS: CARD_IDS,
-    COMMON_IDS: COMMON_IDS,
-    OBSERVER_ODDS: OBSERVER_ODDS,
-    RANKS: RANKS,
-    ROUND_NAMES: ROUND_NAMES,
-    STARTING_STASH: STARTING_STASH,
-    stashValue: stashValue,
-    toCandy: toCandy,
-    candyLine: candyLine,
-    describeStash: describeStash,
-    settlePool: settlePool,
-    rankName: rankName,
-    buildPots: buildPots,
-    applyCard: applyCard,
-    previewCard: previewCard,
-    coinPhrase: coinPhrase
-  };
-})(window);
+})(typeof window !== 'undefined' ? window : globalThis);

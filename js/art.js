@@ -1,147 +1,127 @@
 /*
- * Quantum Poker — art.js
- * Every mark on the table, drawn as SVG. No emoji, no icon font.
- *
- * The line work is deliberately heavy and a little irregular: this is meant to
- * look struck into metal or cut into a woodblock, not vector-smooth.
+ * Quantum Hold'em — art.js
+ * The few marks that are drawn rather than typed: circuit symbols for the
+ * cards and avatars for the seats. Everything else on the table is CSS.
  */
-(function (global) {
+(function (root) {
   'use strict';
 
-  function svg(viewBox, body, cls) {
-    return '<svg class="' + (cls || '') + '" viewBox="' + viewBox + '" aria-hidden="true" focusable="false">' +
+  function svg(body, cls, viewBox) {
+    return '<svg class="' + (cls || '') + '" viewBox="' + (viewBox || '0 0 100 100') +
+      '" aria-hidden="true" focusable="false" fill="currentColor" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">' +
       body + '</svg>';
   }
 
-  /* ---------------- the coin ---------------- */
-
-  // A struck qubit. The Bloch meridian is the ring; the numeral is the value
-  // it will read if you measure it now. Beginners see a 1 and know it is good;
-  // anyone who knows what a qubit is sees exactly what it is.
-  var MERIDIAN =
-    '<circle cx="50" cy="50" r="39" fill="none" stroke="currentColor" stroke-width="2.6" opacity=".5"/>' +
-    '<ellipse cx="50" cy="50" rx="15" ry="39" fill="none" stroke="currentColor" stroke-width="2" opacity=".32"/>' +
-    '<path d="M11 50 H89" stroke="currentColor" stroke-width="1.6" opacity=".22"/>';
-
-  var GLYPH_ONE =
-    '<path d="M38 33 L57 22 L57 78 L46 78 L46 39 Z"/>' +
-    '<rect x="34" y="78" width="34" height="9" rx="1.5"/>';
-
-  var GLYPH_ZERO =
-    '<path d="M50 20 c11 0 19 13 19 30 s-8 30-19 30 -19-13-19-30 8-30 19-30z' +
-    'M50 32 c-5 0-8 8-8 18 s3 18 8 18 8-8 8-18 -3-18-8-18z" fill-rule="evenodd"/>';
-
-  function coinOne()  { return svg('0 0 100 100', MERIDIAN + GLYPH_ONE, 'ink'); }
-  function coinZero() { return svg('0 0 100 100', MERIDIAN + GLYPH_ZERO, 'ink'); }
-
-  /* ---------------- the cards ---------------- */
-
-  // Where a real circuit symbol exists, the card uses it. Bind is the CNOT of
-  // every quantum-computing textbook; Observer is the measurement gate.
-  var CARD_ART = {
-    // Flip — a Bloch vector turned end over end.
-    FLIP:
-      '<circle cx="50" cy="52" r="30" fill="none" stroke-width="4" opacity=".35"/>' +
-      '<path d="M50 82 L50 26" stroke-width="7" stroke-linecap="round"/>' +
-      '<path d="M50 18 L60 34 L40 34 Z"/>' +
-      '<path d="M22 40 A32 32 0 0 1 78 40" fill="none" stroke-width="4" opacity=".55"/>' +
-      '<path d="M78 40 L84 27 L67 31 Z" opacity=".55"/>',
-
-    // Haunt — one path in, two out. Superposition, drawn as interference.
-    HAUNT:
-      '<path d="M8 50 H34" stroke-width="6" stroke-linecap="round"/>' +
-      '<path d="M34 50 C48 50 50 24 64 24 H92" fill="none" stroke-width="5.5" stroke-linecap="round"/>' +
-      '<path d="M34 50 C48 50 50 76 64 76 H92" fill="none" stroke-width="5.5" stroke-linecap="round"/>' +
-      '<circle cx="34" cy="50" r="7"/>',
-
-    // Summon — the vector snapped to the north pole and pinned there.
-    SUMMON:
-      '<circle cx="50" cy="54" r="29" fill="none" stroke-width="4" opacity=".35"/>' +
-      '<ellipse cx="50" cy="54" rx="11" ry="29" fill="none" stroke-width="3" opacity=".25"/>' +
-      '<path d="M50 54 L50 22" stroke-width="7" stroke-linecap="round"/>' +
-      '<path d="M50 12 L61 30 L39 30 Z"/>' +
-      '<circle cx="50" cy="54" r="5"/>' +
-      '<path d="M26 82 H74" stroke-width="5" stroke-linecap="round" opacity=".6"/>',
-
-    // Bind — the CNOT symbol: control dot, wire, target ring.
-    BIND:
-      '<circle cx="50" cy="22" r="8.5"/>' +
-      '<path d="M50 22 V64" stroke-width="5"/>' +
-      '<circle cx="50" cy="70" r="17" fill="none" stroke-width="5"/>' +
-      '<path d="M33 70 H67 M50 53 V87" stroke-width="5" stroke-linecap="round"/>',
-
-    // Observer — the measurement gate: a meter in a box.
-    OBSERVER:
-      '<rect x="14" y="22" width="72" height="58" rx="5" fill="none" stroke-width="5"/>' +
-      '<path d="M28 68 A22 22 0 0 1 72 68" fill="none" stroke-width="4.5"/>' +
-      '<path d="M50 68 L70 42" stroke-width="5" stroke-linecap="round"/>' +
-      '<circle cx="50" cy="68" r="4.5"/>'
+  /* Cards carry the symbol a circuit diagram would use for that gate. */
+  const GATE = {
+    X:  '<path d="M6 50 H26 M74 50 H94" stroke-width="6" fill="none"/>' +
+        '<circle cx="50" cy="50" r="24" fill="none" stroke-width="6"/>' +
+        '<path d="M50 26 V74 M26 50 H74" stroke-width="6"/>',
+    H:  '<path d="M6 50 H22 M78 50 H94" stroke-width="6" fill="none"/>' +
+        '<rect x="22" y="22" width="56" height="56" rx="6" fill="none" stroke-width="6"/>' +
+        '<path d="M38 34 V66 M62 34 V66 M38 50 H62" stroke-width="7" fill="none"/>',
+    Z:  '<path d="M6 50 H22 M78 50 H94" stroke-width="6" fill="none"/>' +
+        '<rect x="22" y="22" width="56" height="56" rx="6" fill="none" stroke-width="6"/>' +
+        '<path d="M38 35 H62 L38 65 H62" stroke-width="7" fill="none"/>',
+    CX: '<path d="M6 28 H94 M6 72 H94" stroke-width="5" fill="none" opacity=".55"/>' +
+        '<circle cx="50" cy="28" r="9"/>' +
+        '<path d="M50 28 V72" stroke-width="6"/>' +
+        '<circle cx="50" cy="72" r="18" fill="none" stroke-width="6"/>' +
+        '<path d="M32 72 H68 M50 54 V90" stroke-width="6"/>',
+    M:  '<path d="M6 50 H16" stroke-width="6" fill="none"/>' +
+        '<rect x="16" y="22" width="68" height="56" rx="6" fill="none" stroke-width="6"/>' +
+        '<path d="M30 66 A20 20 0 0 1 70 66" fill="none" stroke-width="5"/>' +
+        '<path d="M50 66 L68 44" stroke-width="6"/>' +
+        '<circle cx="50" cy="66" r="4"/>' +
+        '<path d="M84 44 H94 M84 56 H94" stroke-width="5" fill="none"/>'
   };
 
-  function cardArt(id) {
-    var body = CARD_ART[id] || '';
-    return '<svg class="card-art" viewBox="0 0 100 100" aria-hidden="true" focusable="false" ' +
-      'stroke="currentColor" fill="currentColor" stroke-linejoin="round">' + body + '</svg>';
+  function gate(id) { return svg(GATE[id] || '', 'gate'); }
+
+  /* Seat avatars. Index 0 is the human. */
+  const AVATARS = [
+    '<path d="M50 10 L61 38 L91 40 L67 58 L75 88 L50 71 L25 88 L33 58 L9 40 L39 38 Z"/>',                            // star
+    '<circle cx="50" cy="50" r="9"/><g fill="none" stroke-width="5"><ellipse cx="50" cy="50" rx="42" ry="16"/>' +
+      '<ellipse cx="50" cy="50" rx="42" ry="16" transform="rotate(60 50 50)"/>' +
+      '<ellipse cx="50" cy="50" rx="42" ry="16" transform="rotate(120 50 50)"/></g>',                                  // orbit
+    '<path d="M62 12a38 38 0 1 0 4 76 30 30 0 1 1-4-76z"/><circle cx="76" cy="30" r="4"/>',                           // moon
+    '<path d="M8 50 C24 24 76 24 92 50 C76 76 24 76 8 50z" fill="none" stroke-width="7"/><circle cx="50" cy="50" r="15"/>', // eye
+    '<circle cx="50" cy="28" r="15" fill="none" stroke-width="8"/><rect x="45.5" y="40" width="9" height="46" rx="2"/>' +
+      '<rect x="54.5" y="58" width="14" height="8" rx="1.5"/><rect x="54.5" y="72" width="10" height="8" rx="1.5"/>', // key
+    '<path d="M22 10 h56 v8 h-6 c0 16-14 24-14 32 s14 16 14 32 h6 v8 h-56 v-8 h6 c0-16 14-24 14-32 s-14-16-14-32 h-6z"/>' // hourglass
+  ];
+
+  function avatar(i) { return svg(AVATARS[i % AVATARS.length], 'avatar'); }
+
+  const ICON = {
+    sound:    '<path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12" fill="none" stroke-width="1.8"/>',
+    muted:    '<path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16 9.5l5 5m0-5l-5 5" fill="none" stroke-width="1.9"/>',
+    play:     '<path d="M8 5v14l11-7z"/>',
+    pause:    '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>',
+    replay:   '<path d="M12 5V2L7 6l5 4V7a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7z"/>',
+    home:     '<path d="M4 11 L12 4 L20 11 V20 H14 V14 H10 V20 H4 Z" fill="none" stroke-width="1.9"/>'
+  };
+
+  function icon(name) { return svg(ICON[name] || '', 'icon', '0 0 24 24'); }
+
+  /* ---- DOM builders shared by the table and the explainer ---- */
+
+  const BADGE = { plus: '+', minus: '−', mixed: '', one: '', zero: '', hidden: '' };
+
+  /** A coin. Paint it with paintCoin(); the node persists so flips animate. */
+  function coinNode(label) {
+    const n = document.createElement('div');
+    n.className = 'coin';
+    n.dataset.kind = 'hidden';
+    n.innerHTML =
+      '<div class="coin-disc"><span class="coin-face front">1</span><span class="coin-face back">0</span></div>' +
+      '<span class="coin-badge"></span>' +
+      '<span class="coin-label">' + (label || '') + '</span>' +
+      '<span class="coin-ket"></span>';
+    return n;
   }
 
-  /* ---------------- player sigils ---------------- */
+  /**
+   * info: { kind, link: {partner, same} | null, ket, up }
+   * `up` and `ket` are shown only when nerd mode asks for them.
+   */
+  const FACE = { plus: '+', minus: '−', mixed: '?' };
 
-  var SIGILS = {
-    moon:      '<path d="M62 14a38 38 0 1 0 4 72 30 30 0 1 1-4-72z"/>' +
-               '<circle cx="74" cy="30" r="3.5"/><circle cx="83" cy="46" r="2.5"/>',
-    key:       '<circle cx="50" cy="27" r="15" fill="none" stroke-width="8"/>' +
-               '<rect x="45.5" y="40" width="9" height="46" rx="2"/>' +
-               '<rect x="54.5" y="58" width="14" height="8" rx="1.5"/>' +
-               '<rect x="54.5" y="72" width="10" height="8" rx="1.5"/>',
-    orbit:     '<circle cx="50" cy="50" r="9"/>' +
-               '<g fill="none" stroke-width="5">' +
-               '<ellipse cx="50" cy="50" rx="44" ry="17"/>' +
-               '<ellipse cx="50" cy="50" rx="44" ry="17" transform="rotate(60 50 50)"/>' +
-               '<ellipse cx="50" cy="50" rx="44" ry="17" transform="rotate(120 50 50)"/></g>',
-    eye:       '<path d="M6 50 C22 24 78 24 94 50 C78 76 22 76 6 50z" fill="none" stroke-width="7"/>' +
-               '<circle cx="50" cy="50" r="17"/>' +
-               '<circle cx="50" cy="50" r="7" fill="var(--seat-ground)"/>',
-    hourglass: '<path d="M22 10 h56 v8 h-6 c0 16-14 24-14 32 s14 16 14 32 h6 v8 h-56 v-8 h6 ' +
-               'c0-16 14-24 14-32 s-14-16-14-32 h-6z"/>' +
-               '<path d="M38 68 q12-9 24 0 c0 8-24 8-24 0z" opacity=".55"/>'
-  };
-
-  var SIGIL_KEYS = ['orbit', 'key', 'moon', 'eye', 'hourglass'];
-
-  function sigil(name) { return svg('0 0 100 100', SIGILS[name] || SIGILS.moon, 'sigil'); }
-
-  /* ---------------- ornament ---------------- */
-
-  function rule() {
-    return svg('0 0 200 12',
-      '<path d="M4 6 H78" stroke-width="1.2" stroke-linecap="round"/>' +
-      '<path d="M122 6 H196" stroke-width="1.2" stroke-linecap="round"/>' +
-      '<path d="M100 1 L106 6 L100 11 L94 6 Z" />' +
-      '<circle cx="88" cy="6" r="1.6"/><circle cx="112" cy="6" r="1.6"/>',
-      'rule');
+  function paintCoin(n, info, nerd) {
+    const kind = info.kind || 'hidden';
+    if (n.dataset.kind !== kind) {
+      n.dataset.kind = kind;
+      // A spinning coin shows its tilt on both faces, so a still frame never
+      // looks like a settled 1 or 0.
+      n.querySelector('.front').textContent = FACE[kind] || '1';
+      n.querySelector('.back').textContent = FACE[kind] || '0';
+    }
+    const badge = n.querySelector('.coin-badge');
+    if (info.link) {
+      badge.textContent = (info.link.same ? '= ' : '≠ ') + (info.link.partner + 1);
+      badge.dataset.link = info.link.same ? 'same' : 'opp';
+    } else {
+      badge.textContent = BADGE[kind] || '';
+      delete badge.dataset.link;
+    }
+    badge.hidden = !badge.textContent;
+    const ket = n.querySelector('.coin-ket');
+    ket.textContent = nerd && kind !== 'hidden'
+      ? (info.ket || '') + (info.up !== undefined ? '  ' + Math.round(info.up * 100) + '%' : '') : '';
   }
 
-  /* ---------------- candy tokens ---------------- */
+  function cardNode(id, card) {
+    const n = document.createElement('button');
+    n.type = 'button';
+    n.className = 'card';
+    n.dataset.id = id;
+    n.innerHTML =
+      '<span class="card-gate">' + card.gate + '</span>' +
+      gate(id) +
+      '<span class="card-name">' + card.name + '</span>';
+    n.title = card.blurb;
+    return n;
+  }
 
-  // Bets are shown as the sweets themselves, not a number with a chip icon.
-  var CANDY_ART = {
-    bar:  '<rect x="8" y="20" width="84" height="60" rx="5"/>' +
-          '<path d="M31 20 v60 M52 20 v60 M73 20 v60" stroke="var(--felt)" stroke-width="3" fill="none" opacity=".5"/>',
-    fun:  '<rect x="20" y="32" width="60" height="36" rx="5"/>' +
-          '<path d="M20 44 L8 38 L8 62 L20 56z M80 44 L92 38 L92 62 L80 56z"/>',
-    pop:  '<circle cx="50" cy="36" r="26"/><rect x="46.5" y="58" width="7" height="36" rx="3"/>',
-    corn: '<path d="M50 8 L72 88 Q50 96 28 88 Z"/>'
-  };
-
-  function candy(kind) { return svg('0 0 100 100', CANDY_ART[kind] || '', 'candy-ico'); }
-
-  global.Art = {
-    coinOne: coinOne,
-    coinZero: coinZero,
-    cardArt: cardArt,
-    sigil: sigil,
-    SIGIL_KEYS: SIGIL_KEYS,
-    rule: rule,
-    candy: candy
-  };
-})(window);
+  root.Art = { gate, avatar, icon, AVATARS, coinNode, paintCoin, cardNode };
+})(typeof window !== 'undefined' ? window : globalThis);

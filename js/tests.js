@@ -1,505 +1,307 @@
 /*
- * Quantum Poker — self-checks. Open index.html?test to run them.
- * No framework: plain asserts, printed to the page and the console.
+ * Quantum Hold'em — self-checks.
+ *   browser:  open index.html?test
+ *   node:     node js/tests.js
+ * No framework: plain asserts.
  */
-(function (global) {
+(function (root) {
   'use strict';
 
-  if (!/[?&]test\b/.test(location.search)) return;
+  const inNode = typeof window === 'undefined';
+  if (!inNode && !/[?&]test\b/.test(location.search)) return;
 
-  var Q = global.Q, E = global.Engine;
-  var out = [], passed = 0, failed = 0;
+  if (inNode) {
+    const fs = require('fs'), path = require('path'), vm = require('vm');
+    const ctx = vm.createContext({ Math, Float64Array, Set, Map, Array, Date, console, Object, Number, String, globalThis: null });
+    ctx.globalThis = ctx;
+    ['quantum', 'engine', 'bots', 'explainer'].forEach((f) => {
+      vm.runInContext(fs.readFileSync(path.join(__dirname, f + '.js'), 'utf8'), ctx, { filename: f + '.js' });
+    });
+    root = ctx;
+  }
+
+  const Q = root.Q, E = root.Engine, Bots = root.Bots, X = root.Explainer;
+  const out = [];
+  let passed = 0, failed = 0;
 
   function ok(name, cond, detail) {
     if (cond) { passed++; out.push('  pass  ' + name); }
     else { failed++; out.push('  FAIL  ' + name + (detail ? '   → ' + detail : '')); }
   }
-  function near(a, b, tol) { return Math.abs(a - b) < (tol || 1e-9); }
-  function group(name) { out.push(''); out.push('▸ ' + name); }
+  const near = (a, b, tol) => Math.abs(a - b) < (tol || 1e-9);
+  const group = (name) => { out.push(''); out.push('▸ ' + name); };
 
-  /* ---- helpers ---- */
-
-  var SETUPS = {
-    down: function (s) { },
-    up:   function (s) { s.x(0); },
-    cw:   function (s) { s.h(0); },
-    ccw:  function (s) { s.h(0); s.z(0); }
+  const SETUPS = {
+    zero: () => {}, one: (s) => s.x(0), plus: (s) => s.h(0), minus: (s) => { s.h(0); s.z(0); }
   };
-
   function after(from, gate) {
-    var s = new Q.QState(1);
+    const s = new Q.QState(1);
     SETUPS[from](s);
     if (gate) s[gate](0);
     return Q.readCoin(s, 0).kind;
   }
 
-  /* ---- 1. the coin metaphor is exact ---- */
+  /* ---- 1. the cards do what the rules say ---- */
 
-  group('Cards do what the table says they do');
-
-  ok('Flip: skull ↔ face-up', after('down', 'x') === 'up' && after('up', 'x') === 'down');
-  ok('Flip: a spinning coin shrugs it off', after('cw', 'x') === 'cw' && after('ccw', 'x') === 'ccw');
-
-  ok('Haunt: resting ↔ spinning', after('down', 'h') === 'cw' && after('cw', 'h') === 'down');
-  ok('Haunt: face-up ↔ counter-clockwise', after('up', 'h') === 'ccw' && after('ccw', 'h') === 'up');
-
-  ok('Summon catches a clockwise spin face-up', after('cw', 'zh') === 'up');
-  ok('Summon kills a counter-clockwise spin', after('ccw', 'zh') === 'down');
-  ok('Summon sets a resting coin spinning', after('down', 'zh') === 'cw' && after('up', 'zh') === 'ccw');
-
-  ['x', 'h'].forEach(function (g) {
-    var allBack = Object.keys(SETUPS).every(function (k) {
-      var s = new Q.QState(1);
-      SETUPS[k](s); s[g](0); s[g](0);
-      return Q.readCoin(s, 0).kind === k;
-    });
-    ok((g === 'x' ? 'Flip' : 'Haunt') + ' played twice is a no-op', allBack);
+  group('Cards do what the rules say');
+  ok('Flip: 0 ↔ 1', after('zero', 'x') === 'one' && after('one', 'x') === 'zero');
+  ok('Flip: a spinning coin ignores it', after('plus', 'x') === 'plus' && after('minus', 'x') === 'minus');
+  ok('Spin: 0 → +, + → 0', after('zero', 'h') === 'plus' && after('plus', 'h') === 'zero');
+  ok('Spin: 1 → −, − → 1', after('one', 'h') === 'minus' && after('minus', 'h') === 'one');
+  ok('Twist: + ↔ −', after('plus', 'z') === 'minus' && after('minus', 'z') === 'plus');
+  ok('Twist: a settled coin ignores it', after('zero', 'z') === 'zero' && after('one', 'z') === 'one');
+  ['x', 'h', 'z'].forEach((g) => {
+    const back = Object.keys(SETUPS).every((k) => { const s = new Q.QState(1); SETUPS[k](s); s[g](0); s[g](0); return Q.readCoin(s, 0).kind === k; });
+    ok(g.toUpperCase() + ' played twice is a no-op', back);
   });
+  ok('Twist then Spin lands a + on 1', (() => { const s = new Q.QState(1); s.h(0); s.z(0); s.h(0); return Q.readCoin(s, 0).kind === 'one'; })());
 
-  // Summon is NOT self-inverse: it walks a coin around a four-step cycle.
-  // dead → ↻ → face-up → ↺ → dead. Worth knowing before you spend two of them.
-  ok('Summon cycles a coin through all four states',
-    after('down', 'zh') === 'cw' && after('cw', 'zh') === 'up' &&
-    after('up', 'zh') === 'ccw' && after('ccw', 'zh') === 'down');
+  /* ---- 2. links ---- */
 
-  (function () {
-    var allBack = Object.keys(SETUPS).every(function (k) {
-      var s = new Q.QState(1);
-      SETUPS[k](s); s.zh(0); s.zh(0); s.zh(0); s.zh(0);
-      return Q.readCoin(s, 0).kind === k;
-    });
-    ok('…so four Summons bring it back where it started', allBack);
-  })();
-
-  /* ---- 2. chains ---- */
-
-  group('Bind chains and unchains');
-
-  (function () {
-    var s = new Q.QState(2);
+  group('Link');
+  (() => {
+    const s = new Q.QState(2);
     s.h(0); s.cx(0, 1);
-    var ch = Q.findChains(s);
-    ok('Bind on a clockwise control makes one chain', ch.length === 1);
-    ok('…and the two coins land the same way', ch.length === 1 && ch[0].same === true);
-    ok('chained coins each read 50/50', near(s.probOne(0), 0.5) && near(s.probOne(1), 0.5));
+    const l = Q.findLinks(s);
+    ok('Link off a spinning control makes one link', l.length === 1 && l[0].same === true);
+    ok('linked coins each read 50/50', near(s.probOne(0), 0.5) && near(s.probOne(1), 0.5));
     s.cx(0, 1);
-    ok('Bind again snaps the chain', Q.findChains(s).length === 0);
-    ok('…and the control is spinning again', Q.readCoin(s, 0).kind === 'cw');
+    ok('Link again breaks it', Q.findLinks(s).length === 0 && Q.readCoin(s, 0).kind === 'plus');
+  })();
+  (() => {
+    const s = new Q.QState(2); s.h(0); s.x(1); s.cx(0, 1);
+    ok('a target on 1 links them opposite', Q.findLinks(s)[0].same === false);
+    const t = new Q.QState(2); t.x(0); t.cx(0, 1);
+    ok('Link off a settled 1 just flips the target', Q.readCoin(t, 1).kind === 'one' && Q.findLinks(t).length === 0);
+    const u = new Q.QState(2); u.h(0); u.cx(0, 1); u.x(1);
+    ok('Flip on a linked pair guarantees exactly one 1', Q.findLinks(u)[0].same === false);
   })();
 
-  (function () {
-    var s = new Q.QState(2);
-    s.h(0); s.x(1); s.cx(0, 1);
-    var ch = Q.findChains(s);
-    ok('a face-up target chains them opposite', ch.length === 1 && ch[0].same === false);
-  })();
+  /* ---- 3. the simulator stays honest ---- */
 
-  (function () {
-    var s = new Q.QState(2);
-    ok('unentangled coins are not reported as chained', Q.findChains(s).length === 0);
-  })();
-
-  /* ---- 3. the simulator stays a valid quantum state ---- */
-
-  group('The simulator stays honest');
-
-  (function () {
-    var rng = Q.mulberry32(99), worst = 0, t, i, s, g;
-    for (t = 0; t < 400; t++) {
-      s = Q.dealBoard(rng, 5);
-      for (i = 0; i < 25; i++) {
-        g = Math.floor(rng() * 4);
-        var a = Math.floor(rng() * 5), b = (a + 1 + Math.floor(rng() * 4)) % 5;
-        if (g === 0) s.x(a); else if (g === 1) s.h(a); else if (g === 2) s.zh(a); else s.cx(a, b);
+  group('Simulator');
+  (() => {
+    const rng = Q.mulberry32(99);
+    let worst = 0;
+    for (let t = 0; t < 300; t++) {
+      const s = Q.dealBoard(rng, 5);
+      for (let i = 0; i < 25; i++) {
+        const g = Math.floor(rng() * 4), a = Math.floor(rng() * 5), b = (a + 1 + Math.floor(rng() * 4)) % 5;
+        if (g === 0) s.x(a); else if (g === 1) s.h(a); else if (g === 2) s.z(a); else s.cx(a, b);
       }
       worst = Math.max(worst, Math.abs(s.norm() - 1));
     }
-    ok('total probability stays 1 over 10 000 random gates', worst < 1e-9, 'drift ' + worst.toExponential(2));
+    ok('probability is conserved over 7 500 random gates', worst < 1e-9, 'drift ' + worst.toExponential(2));
   })();
-
-  (function () {
-    var rng = Q.mulberry32(5), bad = 0, t, s, i, p, sum;
-    for (t = 0; t < 200; t++) {
-      s = Q.dealBoard(rng, 5);
-      for (i = 0; i < 5; i++) {
-        p = s.probOne(i);
-        if (p < -1e-9 || p > 1 + 1e-9) bad++;
-      }
-      sum = s.bellProbs(0, 1).reduce(function (x, y) { return x + y; }, 0);
-      if (!near(sum, 1, 1e-9)) bad++;
+  (() => {
+    const rng = Q.mulberry32(31);
+    let bad = 0;
+    for (let t = 0; t < 300; t++) {
+      const s = Q.dealBoard(rng, 5);
+      let given = 0, free = 0;
+      for (let i = 0; i < 5; i++) { const k = Q.readCoin(s, i).kind; if (k === 'one') given++; if (k !== 'one' && k !== 'zero') free++; }
+      if (given > 1 || free < 2) bad++;
     }
-    ok('every coin probability is in [0,1] and Bell weights sum to 1', bad === 0, bad + ' violations');
+    ok('dealt boards are never already won or hopeless', bad === 0, bad + ' bad deals');
+  })();
+  (() => {
+    const rng = Q.mulberry32(4242), s = new Q.QState(5);
+    s.x(0); s.h(1);
+    let c0 = 0, c1 = 0;
+    for (let i = 0; i < 4000; i++) { const b = s.measure(rng); c0 += b[0]; c1 += b[1]; }
+    ok('a settled 1 lands 1 every time', c0 === 4000);
+    ok('a spinning coin lands 1 about half the time', Math.abs(c1 / 4000 - 0.5) < 0.03, (c1 / 4000).toFixed(3));
+  })();
+  (() => {
+    const rng = Q.mulberry32(77), s = new Q.QState(2);
+    s.h(0); s.cx(0, 1);
+    let mismatched = 0;
+    for (let i = 0; i < 2000; i++) { const b = s.measure(rng); if (b[0] !== b[1]) mismatched++; }
+    ok('linked coins always land together', mismatched === 0);
   })();
 
-  (function () {
-    var s = new Q.QState(1);
-    var m0 = s.probMinus(0); s.h(0);
-    var mCw = s.probMinus(0); s.z(0);
-    var mCcw = s.probMinus(0);
-    ok('spin direction is readable: resting .5, ↻ 0, ↺ 1',
-      near(m0, 0.5) && near(mCw, 0) && near(mCcw, 1));
-  })();
+  /* ---- 4. Collapse ---- */
 
-  (function () {
-    var rng = Q.mulberry32(31), bad = 0, t, s;
-    for (t = 0; t < 300; t++) {
-      s = Q.dealBoard(rng, 5);
-      var given = 0, free = 0, i, c;
-      for (i = 0; i < 5; i++) {
-        c = Q.readCoin(s, i);
-        if (c.kind === 'up') given++;
-        if (c.kind !== 'up' && c.kind !== 'down') free++;
-      }
-      if (given > 2 || free < 2) bad++;
-    }
-    ok('dealt boards are never already-won or hopeless', bad === 0, bad + ' bad deals');
-  })();
-
-  /* ---- 4. counting a measurement ---- */
-
-  group('Measurement matches the odds');
-
-  (function () {
-    var rng = Q.mulberry32(4242);
-    var s = new Q.QState(5);
-    s.x(0); s.h(1);                       // coin 1 certain, coin 2 fifty-fifty
-    var c0 = 0, c1 = 0, n = 4000, i, bits;
-    for (i = 0; i < n; i++) { bits = s.measure(rng); c0 += bits[0]; c1 += bits[1]; }
-    ok('a face-up coin lands face-up every time', c0 === n);
-    ok('a spinning coin lands ~50%', Math.abs(c1 / n - 0.5) < 0.03, (c1 / n).toFixed(3));
-  })();
-
-  (function () {
-    var rng = Q.mulberry32(77);
-    var s = new Q.QState(2);
-    s.h(0); s.cx(0, 1);                   // chained, same way
-    var mismatched = 0, i, bits;
-    for (i = 0; i < 2000; i++) { bits = s.measure(rng); if (bits[0] !== bits[1]) mismatched++; }
-    ok('chained coins always land together', mismatched === 0, mismatched + ' mismatches');
-  })();
-
-  /* ---- 5. card previews ---- */
-
-  group('Card preview tells the truth');
-
-  (function () {
-    var s = new Q.QState(5);
-    s.h(0);
-    var pv = E.previewCard(s, 'SUMMON', [0], 5);
-    ok('Summon on a ↻ coin is worth exactly +0.5', near(pv.delta, 0.5, 1e-9), String(pv.delta));
-    ok('…and says it settles the coin on 1', /settles coin 1 on 1/.test(pv.text), pv.text);
-  })();
-
-  (function () {
-    var s = new Q.QState(5);
-    var pv = E.previewCard(s, 'FLIP', [2], 5);
-    ok('Flip on a dead coin is worth +1', near(pv.delta, 1, 1e-9), String(pv.delta));
-  })();
-
-  (function () {
-    // Bind with a settled control is a conditional flip, not a chain. The
-    // preview must say what really happens rather than talk about chains.
-    var s = new Q.QState(5);
-    s.x(0);                                  // coin 1 face-up, coin 3 dead
-    var pv = E.previewCard(s, 'BIND', [0, 2], 5);
-    ok('Bind off a face-up coin flips the target, and says so',
-      near(pv.delta, 1, 1e-9) && /settles coin 3 on 1/.test(pv.text), pv.text);
-  })();
-
-  (function () {
-    var s = new Q.QState(5);
-    s.h(0);
-    var pv = E.previewCard(s, 'BIND', [0, 1], 5);
-    ok('Bind off a spinning coin says it links them', /links coins 1 and 2/.test(pv.text), pv.text);
-    var chained = pv.state;
-    var pv2 = E.previewCard(chained, 'BIND', [0, 1], 5);
-    ok('…and Bind again says it breaks the link', /breaks the link/.test(pv2.text), pv2.text);
-  })();
-
-  /* ---- 6. candy ---- */
-
-  group('Candy adds up');
-
-  (function () {
-    var bad = 0, v;
-    for (v = 0; v <= 600; v++) if (E.stashValue(E.toCandy(v)) !== v) bad++;
-    ok('every value from 0 to 600 breaks into exact candy', bad === 0, bad + ' failures');
-  })();
-
-  ok('the starting stash is 200 points', E.stashValue(E.STARTING_STASH) === 200,
-    String(E.stashValue(E.STARTING_STASH)));
-
-  ok('candy is described in words', E.candyLine(37) === '1× Bar, 1× Fun, 2× Corn', E.candyLine(37));
-  ok('an empty stash says so', E.candyLine(0) === 'nothing', E.candyLine(0));
-
-  (function () {
-    // The winner cannot be told to collect 24 chocolate bars when the table
-    // only owns 12. Every payout must come out of the candy that exists.
-    var rng = Q.mulberry32(12), bad = 0, overdrawn = 0, short = 0, t, i;
-    for (t = 0; t < 4000; t++) {
-      var n = 2 + Math.floor(rng() * 4), total = 200 * n;
-      var cuts = [0, total];
-      for (i = 0; i < n - 1; i++) cuts.push(Math.floor(rng() * (total + 1)));
-      cuts.sort(function (a, b) { return a - b; });
-      var players = [];
-      for (i = 0; i < n; i++) players.push({ points: cuts[i + 1] - cuts[i] });
-      var out = E.settlePool(players);
-      out.forEach(function (o, k) {
-        if (E.stashValue(o) + o.short !== players[k].points) bad++;
-        if (o.short) short++;
-      });
-      E.CANDY.forEach(function (c) {
-        var used = out.reduce(function (s2, o) { return s2 + o[c.key]; }, 0);
-        if (used > (E.STARTING_STASH[c.key] || 0) * n) overdrawn++;
-      });
-    }
-    ok('4000 random finishes pay out exactly', bad === 0 && short === 0, bad + ' wrong, ' + short + ' short');
-    ok('…and never hand out candy the table does not have', overdrawn === 0, overdrawn + ' overdrawn');
-  })();
-
-  /* ---- 7. side pots ---- */
-
-  group('Side pots');
-
-  (function () {
-    var ps = [
-      { committed: 50, folded: false },
-      { committed: 100, folded: false },
-      { committed: 100, folded: false },
-      { committed: 20, folded: true }
-    ];
-    var pots = E.buildPots(ps);
-    var total = pots.reduce(function (s, p) { return s + p.amount; }, 0);
-    ok('every candy committed ends up in some pot', total === 270, String(total));
-    ok('a short stack cannot win the side pot',
-      pots[pots.length - 1].eligible.join() === '1,2', pots[pots.length - 1].eligible.join());
-    ok('a folder is never eligible',
-      pots.every(function (p) { return p.eligible.indexOf(3) === -1; }));
-  })();
-
-  (function () {
-    var ps = [{ committed: 30, folded: false }, { committed: 30, folded: false }];
-    var pots = E.buildPots(ps);
-    ok('a flat pot is a single pot', pots.length === 1 && pots[0].amount === 60);
-  })();
-
-  /* ---- 8. whole games ---- */
-
-  group('Complete games, played by bots');
-
-  (function () {
-    var START = E.stashValue(E.STARTING_STASH);
-    var hands = 0, allIns = 0, splits = 0, problems = [];
-
-    function playHand(g, rng, wild) {
-      var guard = 0;
-      while (g.phase === 'betting') {
-        if (++guard > 500) { problems.push('betting never closed'); return; }
-        var p = g.players[g.actor], r = rng();
-        if (wild && r < 0.15) g.raiseTo(Math.min(p.bet + p.points, g.currentBet + g.minRaise * (1 + Math.floor(rng() * 4))));
-        else if (r < 0.08 && g.toCall(g.actor) > 0) g.fold();
-        else g.call();
-      }
-      guard = 0;
-      while (g.phase === 'gates') {
-        if (++guard > 200) { problems.push('gate phase never closed'); return; }
-        var seat = g.actor, best;
-        while ((best = g.bestPlay(seat)) && best.delta > 1e-9) {
-          if (!g.playCard(best.card, best.targets).ok) break;
-        }
-        g.endTurn();
-      }
-    }
-
-    for (var seed = 1; seed <= 60; seed++) {
-      var rng = Q.mulberry32(seed * 977);
-      var nP = 2 + Math.floor(rng() * 4);
-      var players = [];
-      for (var i = 0; i < nP; i++) players.push({ name: 'P' + i, sigil: 'moon' });
-      var g = new E.Game({ players: players, seed: seed });
-      var expect = START * nP, safety = 0;
-      do {
-        playHand(g, rng, seed % 2 === 1);
-        hands++;
-        if (g.players.some(function (p) { return p.allIn; })) allIns++;
-        if (g.results && g.results.pots.some(function (p) { return p.winners.length > 1; })) splits++;
-        var total = g.players.reduce(function (s, p) { return s + p.points; }, 0);
-        if (total !== expect) problems.push('candy leaked in seed ' + seed + ' (' + total + ' vs ' + expect + ')');
-        if (g.players.some(function (p) { return p.points < 0; })) problems.push('negative stack in seed ' + seed);
-        if (++safety > 400) { problems.push('seed ' + seed + ' never finished'); break; }
-      } while (g.nextHand());
-      if (g.live().length !== 1) problems.push('seed ' + seed + ' ended with ' + g.live().length + ' players standing');
-    }
-
-    ok('60 games, ' + hands + ' hands: candy is conserved and exactly one player is left',
-      problems.length === 0, problems.slice(0, 3).join(' | '));
-    ok('the bots hit all-ins (' + allIns + ') and split pots (' + splits + ')', allIns > 0 && splits > 0);
-  })();
-
-  /* ---- 9. the Observer ---- */
-
-  group('The Observer');
-
-  (function () {
-    var rng = Q.mulberry32(3), ones = 0, n = 3000, i, s2, bit;
-    for (i = 0; i < n; i++) {
-      s2 = new Q.QState(3); s2.h(0); s2.cx(0, 1); s2.h(2);
-      bit = s2.collapse(0, rng);
+  group('Collapse');
+  (() => {
+    const rng = Q.mulberry32(3);
+    let ones = 0, bad = 0;
+    for (let i = 0; i < 2000; i++) {
+      const s = new Q.QState(3); s.h(0); s.cx(0, 1); s.h(2);
+      const bit = s.collapse(0, rng);
       ones += bit;
-      if (Math.abs(s2.probOne(1) - bit) > 1e-9) { ok('entangled partner follows', false); return; }
-      if (Q.findChains(s2).length) { ok('the link is destroyed', false); return; }
-      if (Math.abs(s2.probOne(2) - 0.5) > 1e-9) { ok('untouched coins are untouched', false); return; }
-      if (Math.abs(s2.norm() - 1) > 1e-9) { ok('state stays normalised', false); return; }
+      if (Math.abs(s.probOne(1) - bit) > 1e-9) bad++;
+      if (Q.findLinks(s).length) bad++;
+      if (Math.abs(s.probOne(2) - 0.5) > 1e-9) bad++;
+      if (Math.abs(s.norm() - 1) > 1e-9) bad++;
     }
-    ok('measuring a spinning coin is a fair toss', Math.abs(ones / n - 0.5) < 0.03, (ones / n).toFixed(3));
-    ok('its entangled partner collapses with it, every time', true);
-    ok('the link, the superposition and nothing else are destroyed', true);
+    ok('collapsing a spinning coin is a fair toss', Math.abs(ones / 2000 - 0.5) < 0.04, (ones / 2000).toFixed(3));
+    ok('its linked partner lands with it; other coins are untouched', bad === 0, bad + ' problems');
+    const s = new Q.QState(1); s.x(0);
+    ok('a settled coin cannot be changed by collapsing it', s.collapse(0, rng) === 1);
+    ok('project() reports an impossible outcome as 0', new Q.QState(1).project(0, 1) === 0);
   })();
 
-  (function () {
-    var rng = Q.mulberry32(8), s2, i, bad = 0;
-    for (i = 0; i < 500; i++) {
-      s2 = new Q.QState(2); s2.x(0);
-      if (s2.collapse(0, rng) !== 1) bad++;
-      s2 = new Q.QState(2);
-      if (s2.collapse(0, rng) !== 0) bad++;
+  /* ---- 5. previews and planning ---- */
+
+  group('Preview and Hint');
+  (() => {
+    const s = new Q.QState(5); s.h(0);
+    const pv = E.previewCard(s, 'Z', [0], 5);
+    ok('preview of Twist on a + says it spins −', /coin 1 spins −/.test(pv.text), pv.text);
+    ok('Twist changes nothing measurable yet, and says so honestly', near(pv.delta, 0));
+    const pv2 = E.previewCard(s, 'X', [0], 5);
+    ok('a card that does nothing says "nothing changes"', pv2.noop && /nothing/.test(pv2.text), pv2.text);
+    const pv3 = E.previewCard(s, 'CX', [0, 1], 5);
+    ok('Link off a spinning coin says the coins become linked', /become linked/.test(pv3.text), pv3.text);
+    const pv4 = E.previewCard(pv3.state, 'CX', [0, 1], 5);
+    ok('…and again says the link breaks', /breaks/.test(pv4.text), pv4.text);
+    const pv5 = E.previewCard(s, 'M', [0], 5);
+    ok('Collapse preview gives the odds', /50% chance/.test(pv5.text), pv5.text);
+  })();
+  (() => {
+    const s = new Q.QState(1); s.h(0);                         // a lone + coin
+    const r = E.plan(s, ['Z', 'H'], 1);
+    ok('planner finds Twist then Spin = +1 on a + coin', near(r.value, 1, 1e-3) && r.first.card === 'Z', JSON.stringify(r));
+    const t = new Q.QState(2); t.h(0); t.cx(0, 1);              // linked pair, nothing else
+    const r2 = E.plan(t, ['M', 'X', 'X'], 2);
+    ok('Collapse then Flip both turns a linked pair into two sure points', near(r2.value, 2, 1e-3), String(r2.value));
+    const u = new Q.QState(1); u.x(0);
+    ok('planner plays nothing when nothing helps', E.plan(u, ['X'], 1).first === null);
+    const w = new Q.QState(5); w.x(0); w.h(1); w.h(2); w.h(4);   // 1 − − 0 +  with Twist, Link, Collapse
+    w.z(1); w.z(2);
+    const r4 = E.plan(w, ['Z', 'CX', 'M'], 5);
+    ok('the hint never opens with a play that changes nothing', r4.first.card === 'CX' && r4.first.targets.join() === '0,3', JSON.stringify(r4.first));
+    const v = new Q.QState(5); v.x(4);
+    const r3 = E.plan(v, ['X'], 5);
+    ok('a lone Flip goes on a 0, not on the 1', r3.first.targets[0] !== 4 && near(r3.value, 2, 1e-3));
+  })();
+
+  /* ---- 6. ranks and pots ---- */
+
+  group('Ranks and pots');
+  ok('more 1s always outranks fewer', E.rankKey([0, 0, 0, 1, 1]) > E.rankKey([1, 0, 0, 0, 0]));
+  ok('tied counts: a 1 further left wins', E.rankKey([1, 0, 0, 0, 1]) > E.rankKey([0, 1, 1, 0, 0]));
+  ok('identical boards tie', E.rankKey([1, 0, 1, 0, 1]) === E.rankKey([1, 0, 1, 0, 1]));
+  ok('five 1s is Coherence', E.rankName(5) === 'Coherence');
+  (() => {
+    const ps = [{ committed: 50, folded: false }, { committed: 100, folded: false }, { committed: 100, folded: false }, { committed: 20, folded: true }];
+    const pots = E.buildPots(ps);
+    ok('every chip committed ends up in some pot', pots.reduce((s, p) => s + p.amount, 0) === 270);
+    ok('a short stack cannot win the side pot', pots[pots.length - 1].eligible.join() === '1,2');
+    ok('a folder is never eligible', pots.every((p) => !p.eligible.includes(3)));
+  })();
+
+  (() => {
+    const bot = Bots.PERSONAS[0];
+    const g3 = new E.Game({ seats: [{ name: 'A' }, { name: 'B', bot }, { name: 'C', bot }], seed: 1 });
+    ok('with three seats the blinds sit left of the dealer and the dealer acts first',
+      g3.sbSeat === 1 && g3.bbSeat === 2 && g3.actor === 0);
+    const g2 = new E.Game({ seats: [{ name: 'A' }, { name: 'B', bot }], seed: 1 });
+    ok('heads-up the dealer posts the small blind and acts first', g2.sbSeat === 0 && g2.bbSeat === 1 && g2.actor === 0);
+    g2.call(); g2.call();
+    ok('…and the big blind opens after the flop', g2.round === 1 && g2.actor === 1);
+  })();
+
+  /* ---- 7. whole games ---- */
+
+  group('Whole games, played by bots');
+  (() => {
+    let hands = 0, allIns = 0, splits = 0, coherences = 0, folds = 0;
+    const problems = [];
+    for (let seed = 1; seed <= 30; seed++) {
+      const n = 2 + (seed % 4);
+      const seats = [];
+      for (let i = 0; i < n; i++) seats.push({ name: 'B' + i, bot: Bots.PERSONAS[i % 4] });
+      const g = new E.Game({ seats, seed, maxHands: 40 });
+      let safety = 0;
+      do {
+        let guard = 0;
+        while (g.phase === 'betting' || g.phase === 'gates') {
+          if (!Bots.step(g)) { problems.push('stuck in seed ' + seed); break; }
+          if (++guard > 400) { problems.push('loop in seed ' + seed); break; }
+        }
+        hands++;
+        if (g.players.some((p) => p.allIn)) allIns++;
+        if (g.results.pots.some((p) => p.winners.length > 1)) splits++;
+        if (g.players.some((p) => p.score === 5)) coherences++;
+        if (g.results.uncontested) folds++;
+        const total = g.players.reduce((s, p) => s + p.chips, 0);
+        if (total !== 1000 * n) problems.push('chips leaked in seed ' + seed + ' (' + total + ')');
+        if (g.players.some((p) => p.chips < 0)) problems.push('negative stack in seed ' + seed);
+        if (++safety > 60) { problems.push('seed ' + seed + ' never finished'); break; }
+      } while (g.nextHand());
+      if (!g.finished()) problems.push('seed ' + seed + ' not finished');
     }
-    ok('a coin already settled cannot be changed by measuring it', bad === 0, bad + ' surprises');
+    ok('30 games, ' + hands + ' hands: chips conserved, every game ends', problems.length === 0, problems.slice(0, 3).join(' | '));
+    ok('bots go all in (' + allIns + '), split pots (' + splits + '), fold hands out (' + folds + ')', allIns > 0 && splits > 0 && folds > 0);
+    ok('Coherence is rare but happens (' + coherences + '/' + hands + ')', coherences > 0 && coherences < hands * 0.25);
   })();
 
-  (function () {
-    // The whole point of the card: it reaches boards the player cannot touch.
-    var players = [{ name: 'A', sigil: 'moon' }, { name: 'B', sigil: 'key' }, { name: 'C', sigil: 'eye' }];
-    var g = new E.Game({ players: players, seed: 12 });
-    g.players.forEach(function (p) { p.board = new Q.QState(5); });
-    g.players[0].board.x(2);              // A has coin 3 pinned on 1
-    g.players[1].board.h(2);              // B still has it spinning
-    g.players[2].board.h(2); g.players[2].board.cx(2, 3);   // C has it linked to coin 4
+  /* ---- 8. determinism ---- */
 
-    var obs = g.observe(2);
-    ok('it returns a result for every player still in the hand', obs.results.length === 3,
-      obs.results.length + ' results');
-    ok('a player who had already settled the coin keeps their value',
-      obs.results[0].bit === 1 && g.players[0].board.probOne(2) === 1);
-    ok('every board is left with that coin settled',
-      g.players.every(function (p) {
-        var v = p.board.probOne(2);
-        return v < 1e-9 || v > 1 - 1e-9;
-      }));
-    ok('a link through the measured coin is broken on that board',
-      Q.findChains(g.players[2].board).length === 0);
-    ok('it says what happened in the log', /Observer/.test(g.log[g.log.length - 1]), g.log[g.log.length - 1]);
+  group('Daily Deal is the same for everyone');
+  (() => {
+    const mk = () => new E.Game({ seats: [{ name: 'A' }, { name: 'B', bot: Bots.PERSONAS[0] }], seed: 555 });
+    const a = mk(), b = mk();
+    b.raiseTo(200); b.call(); b.endTurn && b.phase === 'gates' && b.endTurn();
+    const sameBoard = a.origin.re.every((v, i) => near(v, b.origin.re[i]));
+    ok('hand 1 deals the same board regardless of what anyone does', sameBoard);
+    ok('…and the same cards', a.players[0].hand.join() === b.players[0].hand.join());
+    a.nextHand = E.Game.prototype.nextHand;
+    while (!a.finished() && (a.phase === 'betting' || a.phase === 'gates')) { if (a.current().bot) Bots.step(a); else a.call(); if (a.phase === 'gates' && !a.current().bot) a.endTurn(); }
+    while (!b.finished() && (b.phase === 'betting' || b.phase === 'gates')) { if (b.current().bot) Bots.step(b); else b.fold(); }
+    a.nextHand(); b.nextHand();
+    ok('hand 2 is identical too, however hand 1 went', a.players[0].hand.join() === b.players[0].hand.join() &&
+      a.origin.re.every((v, i) => near(v, b.origin.re[i])));
   })();
 
-  (function () {
-    var rng = Q.mulberry32(1), withIt = 0, trials = 4000, i;
-    for (i = 0; i < trials; i++) if (rng() < E.OBSERVER_ODDS) withIt++;
-    ok('it is in roughly a fifth of decks', Math.abs(withIt / trials - E.OBSERVER_ODDS) < 0.03,
-      (withIt / trials).toFixed(3));
+  /* ---- 9. the explainer ---- */
 
-    var g = new E.Game({ players: [{ name: 'A' }, { name: 'B' }], seed: 5 });
-    var seen = 0, most = 0, h;
-    for (h = 0; h < 300; h++) {
-      // startHand() empties hands before dealing; do the same here so the
-      // count is per-deal rather than cumulative.
-      g.players.forEach(function (p) { p.hand = {}; });
-      g.dealCards();
-      var count = g.players.reduce(function (a, p) { return a + (p.hand.OBSERVER || 0); }, 0);
-      most = Math.max(most, count);
-      seen += count;
-    }
-    ok('never more than one is in play at a time', most <= 1, 'saw ' + most);
-    ok('it does turn up, but not often', seen > 5 && seen < 120, seen + ' in 300 deals');
-  })();
-
-  (function () {
-    var g = new E.Game({ players: [{ name: 'A' }, { name: 'B' }], seed: 21 });
-    var threw = false;
-    try { E.applyCard(g.players[0].board, 'OBSERVER', [0]); } catch (e) { threw = true; }
-    ok('it refuses to be applied to one board in isolation', threw);
-  })();
-
-  /* ---- 10. the tutorial film ---- */
-
-  group('The how-to-play film');
-
-  (function () {
-    var F = global.Film;
-    var cues = F.cues, i;
-
-    var sorted = true;
-    for (i = 1; i < cues.length; i++) if (cues[i].t < cues[i - 1].t) sorted = false;
+  group('The explainer');
+  (() => {
+    const cues = X.cues;
+    let sorted = true;
+    for (let i = 1; i < cues.length; i++) if (cues[i].t < cues[i - 1].t) sorted = false;
     ok('cues are in time order', sorted);
-
-    ok('every cue lands inside the running time',
-      cues.every(function (c) { return c.t >= 0 && c.t <= F.duration; }));
-
-    ok('every sound cue names a real sound',
-      cues.every(function (c) { return !c.sfx || typeof global.Sound[c.sfx] === 'function'; }),
-      cues.filter(function (c) { return c.sfx && !global.Sound[c.sfx]; })
-          .map(function (c) { return c.sfx; }).join(','));
-
-    var KINDS = ['up', 'down', 'cw', 'ccw', 'murky', 'hidden'];
-    var badCoin = null;
-    cues.forEach(function (c) {
-      (c.set.coins || []).forEach(function (spec) {
-        if (KINDS.indexOf(spec.k) === -1) badCoin = spec.k;
-      });
-    });
-    ok('every coin in the script is a state the game can show', badCoin === null, String(badCoin));
-
-    var badCard = null;
-    cues.forEach(function (c) {
-      (c.set.cards || []).forEach(function (id) { if (!E.CARDS[id]) badCard = id; });
+    ok('every cue lands inside the running time', cues.every((c) => c.t >= 0 && c.t <= X.duration));
+    const KINDS = ['one', 'zero', 'plus', 'minus', 'mixed', 'hidden'];
+    let badCoin = null, badCard = null;
+    cues.forEach((c) => {
+      (c.set.coins || []).forEach((spec) => { const k = typeof spec === 'string' ? spec : spec.kind; if (!KINDS.includes(k)) badCoin = k; });
+      (c.set.cards || []).forEach((id) => { if (!E.CARDS[id]) badCard = id; });
       if (c.set.cardSpot && !E.CARDS[c.set.cardSpot]) badCard = c.set.cardSpot;
     });
+    ok('every coin in the script is a state the table can show', badCoin === null, String(badCoin));
     ok('every card in the script is a card in the deck', badCard === null, String(badCard));
-
-    // Walk the whole film a tenth of a second at a time: no gaps, no crashes.
-    var silent = 0, noChapter = 0, worst = null, t;
-    for (t = 0.5; t <= F.duration; t += 0.1) {
-      var st = F.stateAt(t);
-      if (!st.caption) { silent++; worst = worst === null ? t : worst; }
-      if (!st.chapter) noChapter++;
+    let silent = 0, badSpot = 0;
+    for (let t = 0.5; t <= X.duration; t += 0.1) {
+      const s = X.stateAt(t);
+      if (!s.caption || !s.chapter) silent++;
+      if (s.spot && s.spot.some((i) => i >= s.coins.length)) badSpot++;
+      if (s.links.some((p) => p[0] >= s.coins.length || p[1] >= s.coins.length)) badSpot++;
     }
-    ok('a caption is on screen at every moment of the film', silent === 0,
-      silent + ' silent frames, first at ' + (worst === null ? '-' : worst.toFixed(1)) + 's');
-    ok('every moment belongs to a chapter', noChapter === 0, noChapter + ' orphan frames');
-
-    ok('it runs between one and two minutes', F.duration > 60 && F.duration < 120,
-      F.duration + 's');
-    ok('it is split into chapters you can jump between', F.chapters.length >= 5,
-      F.chapters.length + ' chapters');
-
-    var ending = F.stateAt(F.duration);
-    ok('it ends on the pay-off — five coins on 1',
-      ending.coins.length === 5 && ending.coins.every(function (c) { return c.k === 'up'; }));
-
-    // The spotlight must never point at a coin that is not on the stage.
-    var badSpot = false;
-    for (t = 0; t <= F.duration; t += 0.1) {
-      var s2 = F.stateAt(t);
-      if (s2.spot && s2.spot.some(function (i2) { return i2 >= s2.coins.length; })) badSpot = true;
-      if (s2.chains && s2.chains.some(function (p) {
-        return p[0] >= s2.coins.length || p[1] >= s2.coins.length;
-      })) badSpot = true;
-    }
-    ok('spotlights and chains only ever point at coins that are on screen', !badSpot);
+    ok('a caption and a chapter are on screen at every moment', silent === 0, silent + ' silent frames');
+    ok('spotlights and links only point at coins on screen', badSpot === 0);
+    ok('it runs between one and two minutes', X.duration > 60 && X.duration < 120, X.duration + 's');
+    ok('every card kind gets its own demonstration', E.CARD_ORDER.every((id) => cues.some((c) => c.set.cardSpot === id)));
   })();
 
   /* ---- report ---- */
 
-  var head = failed === 0
-    ? '✅  ALL ' + passed + ' CHECKS PASSED'
-    : '❌  ' + failed + ' FAILED, ' + passed + ' passed';
+  const head = failed === 0 ? '✅  ALL ' + passed + ' CHECKS PASSED' : '❌  ' + failed + ' FAILED, ' + passed + ' passed';
+  const text = 'Quantum Hold’em — self-checks\n' + '='.repeat(46) + '\n' + head + '\n' + out.join('\n') + '\n';
 
-  var pre = document.getElementById('test-out');
-  pre.hidden = false;
-  pre.textContent = 'Quantum Poker — self-checks\n' + '='.repeat(46) + '\n' +
-    head + '\n' + out.join('\n') +
-    '\n\n' + '='.repeat(46) + '\nRemove ?test from the URL to play.';
-  pre.style.color = failed === 0 ? '#8ee6a0' : '#ff9a9a';
-
-  (failed === 0 ? console.log : console.error)(head);
-  global.__ccTestResult = { passed: passed, failed: failed };
-})(window);
+  if (inNode) {
+    console.log(text);
+    process.exitCode = failed ? 1 : 0;
+  } else {
+    const pre = document.getElementById('test-out');
+    pre.hidden = false;
+    pre.textContent = text + '\n' + '='.repeat(46) + '\nRemove ?test from the URL to play.';
+    pre.style.color = failed === 0 ? '#8ee6a0' : '#ff9a9a';
+    document.getElementById('home').hidden = true;
+    (failed === 0 ? console.log : console.error)(head);
+    root.__testResult = { passed, failed };
+  }
+})(typeof window !== 'undefined' ? window : globalThis);

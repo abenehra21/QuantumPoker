@@ -1,23 +1,23 @@
 /*
- * Quantum Poker — sound.js
+ * Quantum Hold'em — sound.js
  * Synthesised on the fly with WebAudio. No audio files, nothing to download.
  *
  * Everything is short, dry and low in the mix. A card game wants the click of
  * a chip and the ring of a coin, not a soundtrack.
  */
-(function (global) {
+(function (root) {
   'use strict';
 
   var ctx = null;
   var master = null;
   var enabled = true;
 
-  try { enabled = localStorage.getItem('cc_sound') !== '0'; } catch (e) { /* fine */ }
+  try { enabled = localStorage.getItem('qh_sound') !== '0'; } catch (e) { /* fine */ }
 
   /** Browsers only allow audio after a gesture, so build lazily on first play. */
   function audio() {
     if (ctx) return ctx;
-    var AC = global.AudioContext || global.webkitAudioContext;
+    var AC = root.AudioContext || root.webkitAudioContext;
     if (!AC) return null;
     ctx = new AC();
     master = ctx.createGain();
@@ -100,7 +100,7 @@
     },
 
     /** A card played onto a coin. */
-    cast: function () {
+    play: function () {
       var c = ready(); if (!c) return;
       var t = c.currentTime;
       tone(520, t, 0.22, 'triangle', 0.16, 1040);
@@ -118,7 +118,7 @@
     },
 
     /** A measurement. Everything in superposition stops being possible. */
-    observe: function () {
+    collapse: function () {
       var c = ready(); if (!c) return;
       var t = c.currentTime;
       tone(1760, t, 0.14, 'sine', 0.14, 440);          // the wavefunction falling in
@@ -147,11 +147,11 @@
 
     toggle: function () {
       enabled = !enabled;
-      try { localStorage.setItem('cc_sound', enabled ? '1' : '0'); } catch (e) { /* fine */ }
+      try { localStorage.setItem('qh_sound', enabled ? '1' : '0'); } catch (e) { /* fine */ }
       if (enabled) S.coin();
       return enabled;
     }
   };
 
-  global.Sound = S;
-})(window);
+  root.Sound = S;
+})(typeof window !== 'undefined' ? window : globalThis);

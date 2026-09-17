@@ -1,142 +1,282 @@
 /*
- * Quantum Poker — ui.js
- *
- * One rule shapes this file: nodes persist. Coins, seats and cards are built
- * once and then updated in place, so the browser can animate a coin flipping
- * or a seat sliding round the table. Rebuilding the DOM every frame would
- * throw all of that away.
+ * Quantum Hold'em — ui.js
+ * Screens and interaction. The engine owns the rules; this file only shows
+ * them. Coins and seats are built once and updated in place so that flips
+ * and chip movements can animate.
  */
-(function (global) {
+(function (root) {
   'use strict';
 
-  var Q = global.Q, E = global.Engine, Art = global.Art, Sound = global.Sound;
+  const Q = root.Q, E = root.Engine, Bots = root.Bots, Art = root.Art, Sound = root.Sound;
 
   /* ------------------------------------------------------------- helpers -- */
 
-  function $(sel) { return document.querySelector(sel); }
+  const $ = (sel) => document.querySelector(sel);
   function el(tag, cls, text) {
-    var n = document.createElement(tag);
+    const n = document.createElement(tag);
     if (cls) n.className = cls;
     if (text !== undefined) n.textContent = text;
     return n;
   }
-  function show(n) { n.hidden = false; }
-  function hide(n) { n.hidden = true; }
-  function esc(s) {
-    return String(s).replace(/[&<>"]/g, function (c) {
-      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
-    });
+  function btn(cls, text, onClick) {
+    const b = el('button', 'btn ' + cls, text);
+    b.type = 'button';
+    b.onclick = onClick;
+    return b;
   }
-  function store(key, value) {
-    try {
-      if (value === undefined) return localStorage.getItem('cc_' + key);
-      localStorage.setItem('cc_' + key, value);
-    } catch (e) { /* private window; carry on */ }
-    return null;
+  const show = (n) => { n.hidden = false; };
+  const hide = (n) => { n.hidden = true; };
+  const fmt = (n) => Number(n).toLocaleString('en-US');
+  const REDUCED = root.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  function load(key, fallback) {
+    try { const v = localStorage.getItem('qh_' + key); return v === null ? fallback : JSON.parse(v); }
+    catch (e) { return fallback; }
   }
-  var REDUCED = global.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  function save(key, value) {
+    try { localStorage.setItem('qh_' + key, JSON.stringify(value)); } catch (e) { /* private window */ }
+  }
+
+  let toastTimer = null;
+  function toast(text) {
+    const t = $('#toast');
+    t.textContent = text;
+    show(t);
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => hide(t), 2600);
+  }
 
   /* --------------------------------------------------------------- state -- */
 
-  var game = null;
-  var seats = [];
-  var selectedCard = null;
-  var pickedCoins = [];
-  var curtainedSeat = -1;
-  var hint = null;
-  var nerd = store('nerd') === '1';
-  var peekTimer = null;
-  var coinNodes = [];
-  var seatNodes = {};
-  var potShown = 0;
-  var potTimer = null;
+  let game = null;
+  let mode = null;            // 'daily' | 'quick' | 'hot'
+  let dailyPractice = false;  // replaying a daily that is already recorded
+  let selectedCard = null;    // card id being played
+  let selectedIdx = -1;       // which copy in the hand, so twins do not both light up
+  let picked = [];
+  let hint = null;
+  let nerd = load('nerd', false);
+  let curtained = -1;
+  let botTimer = null;
+  let coinNodes = [];
+  let seatNodes = {};
+  let potShown = 0, potTimer = null;
+  let peekTimer = null, peeking = false;
+  let challengeSeed = null;
 
-  var DEFAULT_NAMES = ['Morrow', 'Vesper', 'Crane', 'Ash', 'Wren'];
+  const HOT_NAMES = ['Ada', 'Max', 'Ines', 'Theo', 'Nova'];
 
-  /* --------------------------------------------------------------- setup -- */
+  /* ---------------------------------------------------------------- daily -- */
 
-  function initSetup() {
-    seats = [0, 1, 2].map(function (i) {
-      return { name: DEFAULT_NAMES[i], sigil: i };
-    });
-    renderSeats();
-    $('#setup-rule').innerHTML = Art.rule();
+  const EPOCH = Date.UTC(2026, 8, 1); // 1 Sep 2026 is Daily #1
 
-    $('#btn-add-seat').onclick = function () {
-      if (seats.length >= 5) return;
-      seats.push({ name: DEFAULT_NAMES[seats.length], sigil: seats.length });
-      Sound.card();
-      renderSeats();
-    };
-    $('#btn-remove-seat').onclick = function () {
-      if (seats.length <= 2) return;
-      seats.pop();
-      renderSeats();
-    };
-    $('#btn-start').onclick = startGame;
-    $('#btn-tutorial').onclick = openFilm;
-    $('#btn-rules-setup').onclick = openRules;
+  function dailyNumber() {
+    const now = new Date();
+    const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    return Math.floor((today - EPOCH) / 86400000) + 1;
+  }
+  const dailySeed = (n) => Q.mix(n, 0xDA117);
+
+  /* ---------------------------------------------------------------- stats -- */
+
+  function stats() {
+    return load('stats', { games: 0, hands: 0, handsWon: 0, bestStack: 0, coherences: 0, streak: 0, lastDaily: 0, daily: {} });
   }
 
-  function renderSeats() {
-    var list = $('#seat-list');
+  function recordHand() {
+    if (mode === 'hot') return;
+    const s = stats(), me = game.players[0];
+    s.hands++;
+    if (me.won > 0) s.handsWon++;
+    if (me.score === 5) s.coherences++;
+    s.bestStack = Math.max(s.bestStack, me.chips);
+    save('stats', s);
+  }
+
+  function recordGame() {
+    if (mode === 'hot') return;
+    const s = stats();
+    s.games++;
+    if (mode === 'daily' && !dailyPractice) {
+      const n = dailyNumber();
+      s.daily[n] = dailySummary();
+      s.streak = s.lastDaily === n - 1 ? s.streak + 1 : 1;
+      s.lastDaily = n;
+    }
+    save('stats', s);
+  }
+
+  function dailySummary() {
+    const me = game.players[0];
+    const place = game.standings().findIndex((p) => p.seat === 0) + 1;
+    const grid = game.history.map((h) => h.winners.includes(0) ? (h.score === 5 ? '⭐' : '🟧') : '⬛').join('');
+    return { chips: me.chips, place, won: me.handsWon, hands: game.history.length, grid };
+  }
+
+  function renderStats() {
+    const s = stats();
+    const box = $('#stats');
+    box.innerHTML = '';
+    if (!s.games && !s.hands) { hide(box); return; }
+    show(box);
+    const cells = [
+      ['Games', s.games], ['Hands won', s.hands ? Math.round(100 * s.handsWon / s.hands) + '%' : '–'],
+      ['Best stack', fmt(s.bestStack)], ['Daily streak', s.streak], ['Coherences', s.coherences]
+    ];
+    cells.forEach(([k, v]) => {
+      const c = el('div', 'stat');
+      c.appendChild(el('b', 'mono', String(v)));
+      c.appendChild(el('span', '', k));
+      box.appendChild(c);
+    });
+  }
+
+  /* ----------------------------------------------------------------- home -- */
+
+  let quickBots = load('quickBots', 3);
+  let hotSeats = load('hotSeats', null) || [0, 1, 2].map((i) => HOT_NAMES[i]);
+
+  function initHome() {
+    root.Explainer.mount($('#explainer'));
+
+    // A challenge link (?seed=…&bots=…) sits you straight down at that deal.
+    const params = new URLSearchParams(location.search);
+    if (params.get('seed') && !params.has('test')) {
+      challengeSeed = parseInt(params.get('seed'), 10) >>> 0;
+      if (params.get('bots')) quickBots = Math.max(1, Math.min(4, parseInt(params.get('bots'), 10) || 3));
+      history.replaceState(null, '', location.pathname);
+      setTimeout(startQuick, 0);
+    }
+
+    $('#quick-name').value = load('name', '');
+    $('#quick-name').oninput = () => save('name', $('#quick-name').value.trim());
+    $('#quick-less').onclick = () => { quickBots = Math.max(1, quickBots - 1); paintQuick(); };
+    $('#quick-more').onclick = () => { quickBots = Math.min(4, quickBots + 1); paintQuick(); };
+    $('#btn-quick').onclick = startQuick;
+    $('#btn-daily').onclick = startDaily;
+    $('#hot-less').onclick = () => { if (hotSeats.length > 2) { hotSeats.pop(); paintHot(); } };
+    $('#hot-more').onclick = () => { if (hotSeats.length < 5) { hotSeats.push(HOT_NAMES[hotSeats.length]); paintHot(); } };
+    $('#btn-hot').onclick = startHot;
+    $('#home-rules').onclick = openRules;
+
+    paintQuick(); paintHot(); paintDaily(); renderStats();
+  }
+
+  function paintQuick() {
+    $('#quick-bots').textContent = quickBots;
+    save('quickBots', quickBots);
+  }
+
+  function paintHot() {
+    const list = $('#hot-seats');
     list.innerHTML = '';
-    seats.forEach(function (s, i) {
-      var row = el('div', 'seat-row');
-
-      var sig = el('button', 'sigil-btn');
-      sig.type = 'button';
-      sig.innerHTML = Art.sigil(Art.SIGIL_KEYS[s.sigil]);
-      sig.setAttribute('aria-label', 'Change the mark for player ' + (i + 1));
-      sig.onclick = function () {
-        s.sigil = (s.sigil + 1) % Art.SIGIL_KEYS.length;
-        sig.innerHTML = Art.sigil(Art.SIGIL_KEYS[s.sigil]);
-      };
-
-      var input = document.createElement('input');
-      input.value = s.name;
-      input.maxLength = 12;
+    hotSeats.forEach((name, i) => {
+      const row = el('label', 'seat-row');
+      row.innerHTML = Art.avatar(i + 1);
+      const input = document.createElement('input');
+      input.value = name; input.maxLength = 12;
       input.setAttribute('aria-label', 'Name for player ' + (i + 1));
-      input.oninput = function () { s.name = input.value; };
-
-      row.appendChild(sig);
+      input.oninput = () => { hotSeats[i] = input.value; save('hotSeats', hotSeats); };
       row.appendChild(input);
       list.appendChild(row);
     });
-    $('#seat-count-label').textContent = seats.length + ' at the table';
-    $('#btn-add-seat').disabled = seats.length >= 5;
-    $('#btn-remove-seat').disabled = seats.length <= 2;
+    $('#hot-count').textContent = hotSeats.length + ' players';
+    save('hotSeats', hotSeats);
   }
 
-  function startGame() {
-    var seedParam = new URLSearchParams(location.search).get('seed');
-    game = new E.Game({
-      players: seats.map(function (s, i) {
-        return { name: (s.name || '').trim() || 'Player ' + (i + 1), sigil: Art.SIGIL_KEYS[s.sigil] };
-      }),
-      seed: seedParam === null ? null : parseInt(seedParam, 10)
+  function paintDaily() {
+    const n = dailyNumber();
+    $('#daily-no').textContent = '#' + n;
+    const done = stats().daily[n];
+    const status = $('#daily-status');
+    if (done) {
+      status.innerHTML = 'Done today: <b class="mono">' + fmt(done.chips) + '</b> chips, ' + ordinal(done.place) +
+        ' place. <span class="grid">' + done.grid + '</span>';
+      $('#btn-daily').textContent = 'Play it again (practice)';
+    } else {
+      status.textContent = 'Not played yet. Resets at midnight UTC.';
+      $('#btn-daily').textContent = 'Play today’s deal';
+    }
+  }
+
+  function ordinal(n) {
+    const s = ['th', 'st', 'nd', 'rd'], v = n % 100;
+    return n + (s[(v - 20) % 10] || s[v] || s[0]);
+  }
+
+  function yourName() { return ($('#quick-name').value || '').trim() || 'You'; }
+
+  function startDaily() {
+    const n = dailyNumber();
+    dailyPractice = !!stats().daily[n];
+    const bots = Bots.PERSONAS.slice(0, 3);
+    startGame('daily', {
+      seats: [{ name: yourName(), avatar: 0 }].concat(bots.map((b) => ({ name: b.name, avatar: b.avatar, bot: b }))),
+      seed: dailySeed(n), maxHands: 10
     });
-    curtainedSeat = -1;
-    coinNodes = [];
-    seatNodes = {};
-    heroCache = null;
-    potShown = 0;
-    $('#seats').innerHTML = '';
-    $('#coin-row').innerHTML = '';
-    hide($('#screen-setup'));
-    show($('#screen-table'));
+  }
+
+  function startQuick() {
+    const bots = Bots.PERSONAS.slice(0, quickBots);
+    startGame('quick', {
+      seats: [{ name: yourName(), avatar: 0 }].concat(bots.map((b) => ({ name: b.name, avatar: b.avatar, bot: b }))),
+      seed: challengeSeed
+    });
+    challengeSeed = null;
+  }
+
+  function startHot() {
+    startGame('hot', {
+      seats: hotSeats.map((name, i) => ({ name: name.trim() || 'Player ' + (i + 1), avatar: i + 1 }))
+    });
+  }
+
+  /* ------------------------------------------------------------ the game -- */
+
+  function startGame(m, opts) {
+    mode = m;
+    game = new E.Game(opts);
+    curtained = -1; selectedCard = null; selectedIdx = -1; picked = []; hint = null;
+    coinNodes = []; seatNodes = {}; potShown = 0;
+    $('#seats').innerHTML = ''; $('#coins').innerHTML = '';
+    hide($('#home')); show($('#table'));
+    window.scrollTo(0, 0);
     Sound.card();
     sync();
   }
 
-  /* ----------------------------------------------------------- main loop -- */
+  function goHome() {
+    clearTimeout(botTimer);
+    game = null;
+    ['#showdown', '#results', '#curtain', '#rules'].forEach((s) => hide($(s)));
+    hide($('#table')); show($('#home'));
+    paintDaily(); renderStats();
+  }
+
+  /** The seat whose cards and board the bottom of the screen shows. */
+  function focusSeat() {
+    if (mode !== 'hot') return 0;
+    const p = game.current();
+    if (p && !p.bot) return p.seat;
+    return curtained >= 0 ? curtained : game.liveSeats()[0];
+  }
 
   function sync() {
     if (!game) return;
+    clearTimeout(botTimer);
     if (game.phase === 'over') { render(); openShowdown(); return; }
-    if (game.phase === 'gates' && curtainedSeat !== game.actor && game.players.length > 1) {
+    const p = game.current();
+    if (!p) { render(); return; }
+    if (p.bot) {
       render();
-      openCurtain(game.actor, function () { curtainedSeat = game.actor; sync(); });
+      const humanIn = game.humans().some((h) => !h.folded && !h.out && !h.allIn);
+      const delay = REDUCED ? 60 : humanIn ? (game.phase === 'gates' ? 900 : 550 + Math.random() * 500) : 220;
+      botTimer = setTimeout(() => { Bots.step(game); Sound.chip(); sync(); }, delay);
+      return;
+    }
+    if (mode === 'hot' && game.phase === 'gates' && curtained !== p.seat) {
+      render();
+      openCurtain(p, () => { curtained = p.seat; sync(); });
       return;
     }
     render();
@@ -144,699 +284,444 @@
 
   function render() {
     if (!game) return;
-    renderTop();
-    renderCoins();
-    renderTableSeats();
-    renderPot();
-    renderRead();
-    renderPrompt();
-    renderTray();
-    renderLedger();
-    requestAnimationFrame(drawChains);
+    renderTop(); renderSeats(); renderCoins(); renderPot(); renderRead(); renderPrompt(); renderYou();
+    requestAnimationFrame(drawLinks);
   }
 
   function renderTop() {
-    $('#street').textContent = game.phase === 'gates' ? 'Cards on the Coins'
-      : E.ROUND_NAMES[Math.min(game.round, 3)];
-    $('#street-meta').textContent =
-      'Hand ' + game.handNo + ' — blinds ' + game.smallBlind + '/' + game.bigBlind;
+    $('#street').textContent = game.street();
+    $('#street-meta').textContent = 'Hand ' + game.handNo + (game.maxHands ? '/' + game.maxHands : '') +
+      ' · blinds ' + game.smallBlind + '/' + game.bigBlind;
     $('#btn-nerd').setAttribute('aria-pressed', nerd ? 'true' : 'false');
-  }
-
-  function activeBoard() {
-    var seat = game.actor >= 0 ? game.actor : game.liveSeats()[0];
-    return game.players[seat].board;
-  }
-
-  /* ---------------------------------------------------------------- coins -- */
-
-  function buildCoin(i) {
-    var slot = el('button', 'coin-slot');
-    slot.type = 'button';
-    slot.dataset.i = String(i);
-
-    var shell = el('div', 'coin-shell');
-    var coin = el('div', 'coin');
-    var d3 = el('div', 'coin-3d');
-    d3.style.animationDelay = (-0.19 * i).toFixed(2) + 's';
-
-    var edge = el('div', 'coin-edge');
-    var front = el('div', 'coin-face coin-front');
-    front.innerHTML = Art.coinOne();
-    var back = el('div', 'coin-face coin-back');
-    back.innerHTML = Art.coinZero();
-    d3.appendChild(edge); d3.appendChild(front); d3.appendChild(back);
-    coin.appendChild(d3);
-    shell.appendChild(coin);
-
-    var meta = el('div', 'coin-meta');
-    var no = el('span', 'coin-no', 'Coin ' + (i + 1));
-    var tag = el('span', 'coin-tag');
-    var ket = el('span', 'coin-ket');
-    meta.appendChild(no); meta.appendChild(tag); meta.appendChild(ket);
-
-    slot.appendChild(shell);
-    slot.appendChild(meta);
-
-    var node = { slot: slot, coin: coin, tag: tag, ket: ket, kind: null };
-    coinNodes[i] = node;
-    return slot;
-  }
-
-  function renderCoins() {
-    var row = $('#coin-row');
-    if (!coinNodes.length || row.children.length !== game.coins) {
-      row.innerHTML = '';
-      coinNodes = [];
-      for (var k = 0; k < game.coins; k++) row.appendChild(buildCoin(k));
-    }
-
-    var board = activeBoard();
-    var chains = Q.findChains(board);
-
-    for (var i = 0; i < game.coins; i++) {
-      var n = coinNodes[i];
-      var revealed = i < game.revealed;
-      var info = revealed ? Q.readCoin(board, i) : null;
-      var kind = revealed ? info.kind : 'hidden';
-      var chain = revealed ? chainFor(chains, i) : null;
-
-      if (n.kind !== kind) {
-        // A coin that has just settled deserves to be heard.
-        if (n.kind && (kind === 'up' || kind === 'down')) Sound.thud();
-        n.coin.dataset.kind = kind;
-        n.kind = kind;
-      }
-
-      n.tag.className = 'coin-tag ' + tagClass(kind, chain);
-      n.tag.textContent = revealed ? tagText(kind, chain) : '';
-      n.tag.hidden = !revealed;
-      n.ket.textContent = nerd && revealed ? (info.ket || 'P↑ ' + info.up.toFixed(2)) : '';
-      n.slot.setAttribute('aria-label', coinAria(i, revealed, info, chain));
-      wireCoin(n, i, revealed);
-    }
-
-    row.dataset.chains = JSON.stringify(chains);
-  }
-
-  function chainFor(chains, i) {
-    for (var k = 0; k < chains.length; k++) {
-      if (chains[k].a === i) return { partner: chains[k].b, same: chains[k].same };
-      if (chains[k].b === i) return { partner: chains[k].a, same: chains[k].same };
-    }
-    return null;
-  }
-
-  function tagClass(kind, chain) {
-    if (chain) return chain.same ? 'link' : 'link-opp';
-    if (kind === 'up') return 'good';
-    if (kind === 'cw' || kind === 'ccw') return 'spin';
-    return '';
-  }
-
-  function tagText(kind, chain) {
-    if (chain) return (chain.same ? 'linked ' : 'opposed ') + (chain.partner + 1);
-    if (kind === 'up') return '1';
-    if (kind === 'down') return '0';
-    if (kind === 'cw') return '↻ 50%';
-    if (kind === 'ccw') return '↺ 50%';
-    return '50%';
-  }
-
-  function coinAria(i, revealed, info, chain) {
-    if (!revealed) return 'Coin ' + (i + 1) + ', not turned over yet';
-    var what = {
-      up: 'settled on 1, a sure point', down: 'settled on 0, worth nothing',
-      cw: 'spinning clockwise, even odds', ccw: 'spinning counter-clockwise, even odds',
-      murky: 'linked to another coin, even odds'
-    }[info.kind];
-    return 'Coin ' + (i + 1) + ', ' + what + (chain
-      ? ', chained to coin ' + (chain.partner + 1) + (chain.same ? ', lands the same' : ', lands opposite')
-      : '');
-  }
-
-  function wireCoin(n, i, revealed) {
-    var live = game.phase === 'gates' && selectedCard && revealed;
-    n.slot.disabled = !live;
-    n.slot.classList.toggle('pickable', !!live);
-    n.slot.classList.toggle('picked', pickedCoins.indexOf(i) !== -1);
-    n.slot.classList.toggle('hinted', !!(hint && hint.targets.indexOf(i) !== -1));
-
-    n.slot.onclick = live ? function () { pickCoin(i); } : null;
-    n.slot.onmouseenter = live ? function () {
-      var card = E.CARDS[selectedCard];
-      var targets = pickedCoins.concat([i]);
-      if (targets.length !== card.arity) return;
-      if (card.arity === 2 && targets[0] === targets[1]) return;
-      var pv = E.previewCard(game.players[game.actor].board, selectedCard, targets, game.coins);
-      if (!pv) return;
-      var swing = pv.delta > 0.001 ? ' <span class="hot">+' + pv.delta.toFixed(1) + '</span>'
-        : pv.delta < -0.001 ? ' ' + pv.delta.toFixed(1) : '';
-      $('#read').innerHTML = esc(card.name) + ' → ' + esc(pv.text) + swing;
-    } : null;
-    n.slot.onmouseleave = live ? function () { renderRead(); } : null;
-  }
-
-  function pickCoin(i) {
-    var card = E.CARDS[selectedCard];
-    if (pickedCoins.indexOf(i) !== -1) return;
-    pickedCoins.push(i);
-    if (pickedCoins.length < card.arity) { hint = null; render(); return; }
-    var wasObserver = selectedCard === 'OBSERVER';
-    var res = game.playCard(selectedCard, pickedCoins.slice());
-    selectedCard = null;
-    pickedCoins = [];
-    hint = null;
-    if (res.ok) {
-      if (wasObserver) { Sound.observe(); showObservation(res.outcome); }
-      else Sound.cast();
-    }
-    render();
-    if (!res.ok) $('#read').textContent = res.why;
-  }
-
-  /**
-   * The Observer reaches boards the player cannot see, so the result has to be
-   * shown to them — otherwise the most expensive card in the deck would appear
-   * to do nothing.
-   */
-  function showObservation(obs) {
-    if (!obs) return;
-    var body = $('#observed-body');
-    body.innerHTML = '';
-    obs.results.forEach(function (r) {
-      var row = el('div', 'observed-row' + (r.seat === obs.by ? ' mine' : ''));
-      var who = el('span', 'observed-who');
-      who.innerHTML = Art.sigil(game.players[r.seat].sigil) +
-        '<span>' + esc(r.name) + (r.seat === obs.by ? ' (you)' : '') + '</span>';
-      row.appendChild(who);
-      var chip = el('span', 'observed-chip ' + (r.bit ? 'one' : 'zero'));
-      chip.innerHTML = r.bit ? Art.coinOne() : Art.coinZero();
-      row.appendChild(chip);
-      row.appendChild(el('span', 'observed-note', r.wasCertain ? 'was already settled' : 'was in superposition'));
-      body.appendChild(row);
-    });
-    $('#observed-title').textContent = 'Coin ' + (obs.coin + 1) + ' collapses';
-    show($('#observed'));
-    $('#observed-close').onclick = function () { hide($('#observed')); };
-    $('#observed-close').focus();
-  }
-
-  function drawChains() {
-    var svg = $('#chain-layer');
-    if (!svg || !game) return;
-    svg.innerHTML = '';
-    var row = $('#coin-row');
-    if (!row || !row.dataset.chains) return;
-    var chains = JSON.parse(row.dataset.chains);
-    var wrap = svg.parentNode.getBoundingClientRect();
-    if (!wrap.width) return;
-    svg.setAttribute('viewBox', '0 0 ' + wrap.width + ' ' + wrap.height);
-
-    chains.forEach(function (ch) {
-      if (ch.a >= game.revealed || ch.b >= game.revealed) return;
-      var A = row.children[ch.a], B = row.children[ch.b];
-      if (!A || !B) return;
-      var ra = A.getBoundingClientRect(), rb = B.getBoundingClientRect();
-      var x1 = ra.left + ra.width / 2 - wrap.left;
-      var x2 = rb.left + rb.width / 2 - wrap.left;
-      var y = ra.top + ra.height * 0.14 - wrap.top;
-      var lift = Math.min(44, 16 + Math.abs(x2 - x1) * 0.14);
-      var stroke = ch.same ? '#63a98c' : '#9d6fa8';
-
-      var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      path.setAttribute('d', 'M' + x1 + ' ' + y + ' Q' + ((x1 + x2) / 2) + ' ' + (y - lift) + ' ' + x2 + ' ' + y);
-      path.setAttribute('fill', 'none');
-      path.setAttribute('stroke', stroke);
-      path.setAttribute('stroke-width', '2');
-      path.setAttribute('stroke-linecap', 'round');
-      path.setAttribute('stroke-dasharray', '6 5');
-      path.style.filter = 'drop-shadow(0 0 5px ' + stroke + ')';
-      svg.appendChild(path);
-    });
   }
 
   /* ---------------------------------------------------------------- seats -- */
 
-  /**
-   * Seats sit on an ellipse with whoever is acting placed at the bottom, the
-   * way an online poker room always seats you nearest the camera. When the
-   * turn passes, the whole table rotates — the CSS transition does the work.
-   */
-  function renderTableSeats() {
-    var box = $('#seats');
-    var order = game.players.map(function (p) { return p.seat; });
-    var hero = game.actor >= 0 ? game.actor : order[0];
-    var n = order.length;
-    var start = order.indexOf(hero);
-    var others = n - 1;
-
-    game.players.forEach(function (p) {
-      var node = seatNodes[p.seat];
+  function renderSeats() {
+    const box = $('#seats');
+    const focus = focusSeat();
+    game.players.forEach((p) => {
+      let node = seatNodes[p.seat];
       if (!node) {
         node = buildSeat(p);
         seatNodes[p.seat] = node;
         box.appendChild(node.root);
       }
-
-      var idx = (order.indexOf(p.seat) - start + n) % n;
-      var isHero = idx === 0;
-
-      // The player to act comes off the felt and onto the rail in front of
-      // them; the rest fan out across the far side of the table.
-      node.root.hidden = isHero;
-      if (!isHero) {
-        var t = others === 1 ? 0.5 : (idx - 1) / (others - 1);
-        if (narrowTable()) {
-          // Not enough felt for an orbit — line them up along the top edge.
-          node.root.style.left = (16 + t * 68).toFixed(2) + '%';
-          node.root.style.top = '13%';
-        } else {
-          var rad = (194 + t * 152) * Math.PI / 180;
-          node.root.style.left = (50 + 40 * Math.cos(rad)).toFixed(2) + '%';
-          node.root.style.top = (50 + 38 * Math.sin(rad)).toFixed(2) + '%';
-        }
-      }
+      node.root.hidden = p.seat === focus;
       paintSeat(node, p);
     });
-
-    paintSeat(heroNode(), game.players[hero], true);
-  }
-
-  function paintSeat(node, p, isHero) {
-    node.root.classList.toggle('acting', p.seat === game.actor);
-    node.root.classList.toggle('folded', p.folded && !p.out);
-    node.root.classList.toggle('out', p.out);
-    node.stack.textContent = p.out ? 'out' : String(p.points);
-    node.bet.textContent = p.bet > 0 ? p.bet + ' in' : (p.folded && !p.out ? 'folded' : '');
-    if (isHero) {
-      node.name.textContent = p.name;
-      node.sig.innerHTML = Art.sigil(p.sigil);
-    }
-    var flag = p.out ? '' : p.allIn ? 'all in' : p.seat === game.dealer ? 'dealer' : '';
-    node.flag.textContent = flag;
-    node.flag.hidden = !flag;
-    node.flag.className = 'seat-flag' + (p.allIn && !p.out ? ' allin' : '');
-  }
-
-  function narrowTable() { return global.innerWidth <= 620; }
-
-  var heroCache = null;
-  function heroNode() {
-    if (heroCache) return heroCache;
-    var root = $('#hero');
-    root.innerHTML = '';
-    var sig = el('span', 'hero-sigil');
-    var name = el('span', 'hero-name', '');
-    var stack = el('span', 'seat-stack', '0');
-    var bet = el('span', 'seat-bet', '');
-    var flag = el('span', 'seat-flag', '');
-    flag.hidden = true;
-    root.appendChild(sig); root.appendChild(name);
-    root.appendChild(stack); root.appendChild(bet); root.appendChild(flag);
-    heroCache = { root: root, sig: sig, name: name, stack: stack, bet: bet, flag: flag };
-    return heroCache;
   }
 
   function buildSeat(p) {
-    var root = el('div', 'seat');
-    var head = el('div', 'seat-head');
-    head.innerHTML = Art.sigil(p.sigil);
+    const rootEl = el('div', 'seat');
+    const head = el('div', 'seat-head');
+    head.innerHTML = Art.avatar(p.avatar);
     head.appendChild(el('span', 'seat-name', p.name));
-    var stack = el('div', 'seat-stack', '0');
-    var bet = el('div', 'seat-bet', '');
-    var flag = el('span', 'seat-flag', '');
-    flag.hidden = true;
-    root.appendChild(head); root.appendChild(stack); root.appendChild(bet); root.appendChild(flag);
-    return { root: root, stack: stack, bet: bet, flag: flag };
+    const chips = el('div', 'seat-chips mono');
+    const bet = el('div', 'seat-bet mono');
+    const flag = el('div', 'seat-flag');
+    rootEl.appendChild(head); rootEl.appendChild(chips); rootEl.appendChild(bet); rootEl.appendChild(flag);
+    return { root: rootEl, chips, bet, flag };
+  }
+
+  function paintSeat(node, p) {
+    node.root.classList.toggle('acting', p.seat === game.actor && game.phase !== 'over');
+    node.root.classList.toggle('folded', p.folded && !p.out);
+    node.root.classList.toggle('out', p.out);
+    node.chips.textContent = p.out ? 'out' : fmt(p.chips);
+    node.bet.textContent = p.bet > 0 ? fmt(p.bet) : '';
+    node.bet.hidden = !(p.bet > 0);
+    const flag = p.out ? '' : p.folded ? 'folded' : p.allIn ? 'all in'
+      : p.seat === game.dealer ? 'dealer' : '';
+    node.flag.textContent = flag;
+    node.flag.hidden = !flag;
+  }
+
+  /* ---------------------------------------------------------------- coins -- */
+
+  function activeBoard() { return game.players[focusSeat()].board; }
+
+  function renderCoins() {
+    const row = $('#coins');
+    if (row.children.length !== game.coins) {
+      row.innerHTML = ''; coinNodes = [];
+      for (let i = 0; i < game.coins; i++) {
+        const n = Art.coinNode(String(i + 1));
+        n.setAttribute('role', 'button');
+        coinNodes.push(n); row.appendChild(n);
+      }
+    }
+    const board = activeBoard();
+    const links = Q.findLinks(board);
+    for (let i = 0; i < game.coins; i++) {
+      const n = coinNodes[i];
+      const revealed = i < game.revealed;
+      const info = revealed ? Q.readCoin(board, i) : { kind: 'hidden' };
+      const link = revealed ? links.find((l) => l.a === i || l.b === i) : null;
+      const linkInfo = link ? { partner: link.a === i ? link.b : link.a, same: link.same } : null;
+      const prevKind = n.dataset.kind;
+      Art.paintCoin(n, { kind: info.kind, link: linkInfo, ket: info.ket, up: info.up }, nerd);
+      if (prevKind !== info.kind && prevKind !== 'hidden' && (info.kind === 'one' || info.kind === 'zero')) Sound.thud();
+      if (prevKind === 'hidden' && info.kind !== 'hidden') Sound.card();
+      n.setAttribute('aria-label', coinAria(i, revealed, info, linkInfo));
+      wireCoin(n, i, revealed);
+    }
+  }
+
+  function coinAria(i, revealed, info, link) {
+    if (!revealed) return 'Coin ' + (i + 1) + ', not shown yet';
+    const words = { one: 'settled on 1', zero: 'settled on 0', plus: 'spinning plus, 50/50', minus: 'spinning minus, 50/50', mixed: 'undecided' };
+    return 'Coin ' + (i + 1) + ', ' + words[info.kind] +
+      (link ? ', linked to coin ' + (link.partner + 1) + (link.same ? ', lands the same' : ', lands opposite') : '');
+  }
+
+  function wireCoin(n, i, revealed) {
+    const live = game.phase === 'gates' && selectedCard && revealed && !game.current().bot;
+    n.classList.toggle('pickable', !!live);
+    n.classList.toggle('picked', picked.includes(i));
+    n.classList.toggle('hinted', !!(hint && hint.targets.includes(i)));
+    n.tabIndex = live ? 0 : -1;
+    n.onclick = live ? () => pickCoin(i) : null;
+    n.onkeydown = live ? (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); pickCoin(i); } } : null;
+    n.onmouseenter = live ? () => previewOn(i) : null;
+    n.onmouseleave = live ? () => renderRead() : null;
+  }
+
+  function previewOn(i) {
+    const card = E.CARDS[selectedCard];
+    const targets = picked.concat([i]);
+    if (targets.length !== card.arity || (card.arity === 2 && targets[0] === targets[1])) return;
+    const pv = E.previewCard(activeBoard(), selectedCard, targets, game.coins);
+    if (!pv) return;
+    const swing = pv.delta > 0.001 ? ' <b class="up">+' + pv.delta.toFixed(1) + '</b>'
+      : pv.delta < -0.001 ? ' <b class="down">' + pv.delta.toFixed(1) + '</b>' : '';
+    $('#read').innerHTML = '<b>' + card.name + '</b> → ' + pv.text + swing;
+  }
+
+  function pickCoin(i) {
+    const card = E.CARDS[selectedCard];
+    if (picked.includes(i)) { picked = picked.filter((x) => x !== i); render(); return; }
+    picked.push(i);
+    if (picked.length < card.arity) { hint = null; render(); renderRead(); return; }
+    const res = game.playCard(selectedCard, picked.slice());
+    const wasCollapse = selectedCard === 'M';
+    selectedCard = null; selectedIdx = -1; picked = []; hint = null;
+    if (res.ok) {
+      if (wasCollapse) {
+        Sound.collapse();
+        toast('Coin ' + (res.play.targets[0] + 1) + ' landed on ' + res.outcome + (res.outcome ? ' — a point.' : '.'));
+      } else Sound.play();
+      const p = game.current();
+      if (p.hand.length === 0) toast('No cards left — press Done.');
+    }
+    render();
+    if (!res.ok) $('#read').textContent = res.why;
+  }
+
+  function drawLinks() {
+    const svg = $('#links');
+    if (!svg || !game) return;
+    svg.innerHTML = '';
+    const wrap = svg.parentNode.getBoundingClientRect();
+    if (!wrap.width) return;
+    svg.setAttribute('viewBox', '0 0 ' + wrap.width + ' ' + wrap.height);
+    Q.findLinks(activeBoard()).forEach((l) => {
+      if (l.a >= game.revealed || l.b >= game.revealed) return;
+      const A = coinNodes[l.a], B = coinNodes[l.b];
+      const ra = A.getBoundingClientRect(), rb = B.getBoundingClientRect();
+      const x1 = ra.left + ra.width / 2 - wrap.left, x2 = rb.left + rb.width / 2 - wrap.left;
+      const y = ra.top + 4 - wrap.top;
+      const lift = Math.min(44, 14 + Math.abs(x2 - x1) * 0.12);
+      const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      p.setAttribute('d', 'M' + x1 + ' ' + y + ' Q' + ((x1 + x2) / 2) + ' ' + (y - lift) + ' ' + x2 + ' ' + y);
+      p.setAttribute('class', 'link-arc ' + (l.same ? 'same' : 'opp'));
+      svg.appendChild(p);
+    });
   }
 
   /* ------------------------------------------------------------------ pot -- */
 
   function renderPot() {
-    var target = game.potTotal();
-    var node = $('#pot-value');
+    const target = game.potTotal();
+    const node = $('#pot-value');
     if (potTimer) { clearInterval(potTimer); potTimer = null; }
-    if (REDUCED || Math.abs(target - potShown) < 2) {
-      potShown = target;
-      node.textContent = target;
-    } else {
-      // Count the pot up rather than snapping it. Money should feel like it moves.
-      var step = Math.max(1, Math.round(Math.abs(target - potShown) / 12));
-      potTimer = setInterval(function () {
-        potShown += potShown < target ? step : -step;
-        if ((step > 0 && Math.abs(target - potShown) <= step)) potShown = target;
-        node.textContent = potShown;
-        if (potShown === target) { clearInterval(potTimer); potTimer = null; }
-      }, 26);
-    }
-
-    var strip = $('#pot-candy');
-    strip.innerHTML = '';
-    var bd = E.toCandy(target);
-    E.CANDY.forEach(function (c) {
-      var count = Math.min(bd[c.key], 6);
-      for (var i = 0; i < count; i++) {
-        var w = el('span', 'candy-' + c.key);
-        w.innerHTML = Art.candy(c.key);
-        strip.appendChild(w);
-      }
-    });
+    if (REDUCED || Math.abs(target - potShown) < 4) { potShown = target; node.textContent = fmt(target); return; }
+    const step = Math.max(1, Math.round(Math.abs(target - potShown) / 10));
+    potTimer = setInterval(() => {
+      potShown += potShown < target ? step : -step;
+      if (Math.abs(target - potShown) <= step) potShown = target;
+      node.textContent = fmt(potShown);
+      if (potShown === target) { clearInterval(potTimer); potTimer = null; }
+    }, 24);
   }
 
-  /* ------------------------------------------------------- read + prompt -- */
+  /* -------------------------------------------------------- read + prompt -- */
 
   function renderRead() {
-    var node = $('#read');
-    if (hint) { node.innerHTML = '<span class="hot">' + esc(hint.label) + '</span>'; return; }
-    if (game.revealed === 0) { node.textContent = 'No coins down yet. This one is on nerve.'; return; }
-
-    var board = activeBoard();
-    var sure = 0, i;
-    for (i = 0; i < game.revealed; i++) if (Q.readCoin(board, i).kind === 'up') sure++;
-    var chains = Q.findChains(board).filter(function (c) {
-      return c.a < game.revealed && c.b < game.revealed;
-    });
-
-    // Say the one thing worth knowing, in a sentence. The arithmetic lives
-    // behind the Psi button, where the people who want it will look.
-    var parts = [];
-    parts.push(sure === 0 ? 'Nothing settled yet'
-      : sure === 1 ? 'One coin settled on 1'
-      : sure + ' coins settled on 1');
-    chains.forEach(function (c) {
-      parts.push('coins ' + (c.a + 1) + ' and ' + (c.b + 1) +
-        (c.same ? ' are linked' : ' are opposed'));
-    });
-    var text = parts.join(' · ') + '.';
-    if (nerd) text += '  ⟨n⟩ = ' + Q.expectedScore(board, game.revealed).toFixed(2);
+    const node = $('#read');
+    if (hint) { node.innerHTML = '<b class="up">Hint:</b> ' + hint.label; return; }
+    if (selectedCard) {
+      const c = E.CARDS[selectedCard];
+      node.innerHTML = '<b>' + c.name + '</b> — ' + c.blurb + (c.arity === 2 && !picked.length ? ' Pick the control coin first.' : '');
+      return;
+    }
+    if (game.revealed === 0) { node.textContent = 'No coins showing yet. Bet on your cards.'; return; }
+    const board = activeBoard();
+    let sure = 0;
+    for (let i = 0; i < game.revealed; i++) if (Q.readCoin(board, i).kind === 'one') sure++;
+    const parts = [sure === 0 ? 'Nothing on 1 yet' : sure === 1 ? 'One coin on 1' : sure + ' coins on 1'];
+    Q.findLinks(board).filter((l) => l.a < game.revealed && l.b < game.revealed)
+      .forEach((l) => parts.push('coins ' + (l.a + 1) + ' & ' + (l.b + 1) + (l.same ? ' land the same' : ' land opposite')));
+    let text = parts.join(' · ');
+    if (nerd) text += ' · ⟨n⟩ = ' + Q.expectedScore(board, game.revealed).toFixed(2);
     node.textContent = text;
   }
 
   function renderPrompt() {
-    var node = $('#prompt');
-    if (game.phase === 'gates') {
-      node.innerHTML = '<em>' + esc(game.players[game.actor].name) +
-        '</em> — put cards on your coins, then end your turn.';
-    } else if (game.phase === 'betting') {
-      var owe = game.toCall(game.actor);
-      node.innerHTML = '<em>' + esc(game.players[game.actor].name) + '</em> — ' +
-        (owe > 0 ? 'call ' + owe + ', raise, or fold.' : 'check, bet, or fold.');
-    } else {
-      node.textContent = game.message;
+    const node = $('#prompt');
+    const p = game.current();
+    if (!p) { node.textContent = game.message; return; }
+    if (p.bot) { node.innerHTML = '<em>' + p.name + '</em> is thinking…'; return; }
+    const who = mode === 'hot' ? '<em>' + p.name + '</em> — ' : '';
+    if (game.phase === 'gates') node.innerHTML = who + 'Pick a card, then a coin. Press <b>Done</b> when finished.';
+    else {
+      const owe = game.toCall(p.seat);
+      node.innerHTML = who + (owe > 0 ? 'Call <b class="mono">' + fmt(owe) + '</b>, raise, or fold.' : 'Check, bet, or fold.');
     }
   }
 
-  function renderLedger() {
-    var box = $('#ledger');
+  /* ------------------------------------------------------------------ you -- */
+
+  function renderYou() {
+    const seat = focusSeat(), p = game.players[seat];
+    const box = $('#you-seat');
+    box.innerHTML = Art.avatar(p.avatar) +
+      '<span class="you-name">' + p.name + '</span>' +
+      '<b class="mono you-chips">' + (p.out ? 'out' : fmt(p.chips)) + '</b>' +
+      (p.bet > 0 ? '<span class="seat-bet mono">' + fmt(p.bet) + '</span>' : '') +
+      (p.seat === game.dealer && !p.out ? '<span class="seat-flag">dealer</span>' : '') +
+      (p.folded && !p.out ? '<span class="seat-flag">folded</span>' : '') +
+      (p.allIn ? '<span class="seat-flag">all in</span>' : '');
+    box.classList.toggle('acting', game.actor === seat && game.phase !== 'over');
+    renderHand(p);
+    renderActions(p);
+  }
+
+  function renderHand(p) {
+    const hand = $('#hand');
+    hand.innerHTML = '';
+    // Pass & play: cards stay face-down while betting (peek to look) and
+    // until the curtain has been acknowledged before playing them.
+    const hidden = mode === 'hot' && ((game.phase === 'betting' && !peeking) || (game.phase === 'gates' && curtained !== p.seat));
+    const mine = game.actor === p.seat && !p.bot;
+    p.hand.forEach((id, k) => {
+      const n = Art.cardNode(id, E.CARDS[id]);
+      n.classList.toggle('back', hidden);
+      if (hidden) { n.innerHTML = ''; n.title = ''; }
+      n.classList.toggle('selected', selectedIdx === k && !hidden);
+      n.classList.toggle('hinted', !!(hint && hint.card === id && p.hand.indexOf(id) === k));
+      n.classList.toggle('lit', game.phase === 'gates' && mine);
+      n.disabled = !(game.phase === 'gates' && mine);
+      n.onclick = () => {
+        const off = selectedIdx === k;
+        selectedCard = off ? null : id;
+        selectedIdx = off ? -1 : k;
+        picked = []; hint = null;
+        if (selectedCard) Sound.card();
+        render();
+      };
+      hand.appendChild(n);
+    });
+    if (!p.hand.length) hand.appendChild(el('span', 'muted small', game.phase === 'gates' ? 'All cards played' : ''));
+    if (hidden) {
+      const peek = btn('ghost small', 'Peek at your cards', () => {
+        peeking = true; render();
+        clearTimeout(peekTimer);
+        peekTimer = setTimeout(() => { peeking = false; render(); }, 5000);
+      });
+      hand.appendChild(peek);
+    }
+  }
+
+  function renderActions(p) {
+    const box = $('#actions');
     box.innerHTML = '';
-    game.log.slice(-3).reverse().forEach(function (line, i) {
-      box.appendChild(el('div', 'ledger-line' + (i === 0 ? ' fresh' : ''), line));
+    if (game.phase === 'over' || game.actor !== p.seat || p.bot) return;
+    if (game.phase === 'betting') renderBetting(box, p);
+    else if (game.phase === 'gates') renderGates(box, p);
+  }
+
+  function afterBet() { selectedCard = null; selectedIdx = -1; picked = []; hint = null; peeking = false; sync(); }
+
+  function renderBetting(box, p) {
+    const seat = p.seat, owe = game.toCall(seat);
+    const maxTo = game.maxRaiseTo(seat), minTo = game.minRaiseTo(seat);
+    const canRaise = maxTo > game.currentBet;
+
+    const row = el('div', 'row');
+    row.appendChild(btn('danger', 'Fold', () => { Sound.fold(); game.fold(); afterBet(); }));
+    row.appendChild(btn('primary', owe === 0 ? 'Check' : owe >= p.chips ? 'Call all in ' + fmt(owe) : 'Call ' + fmt(owe),
+      () => { if (owe > 0) Sound.chip(); game.call(); afterBet(); }));
+    box.appendChild(row);
+
+    if (!canRaise) return;
+    const pot = game.potTotal();
+    const raiseRow = el('div', 'raise-row');
+    const slider = document.createElement('input');
+    slider.type = 'range'; slider.min = String(minTo); slider.max = String(maxTo); slider.step = '1';
+    slider.value = String(Math.min(maxTo, Math.max(minTo, game.currentBet + Math.round(pot * 0.6))));
+    slider.setAttribute('aria-label', 'Raise to');
+    const amt = el('b', 'mono raise-amt', fmt(slider.value));
+    slider.oninput = () => { amt.textContent = fmt(slider.value); };
+
+    const presets = el('div', 'presets');
+    [['Min', minTo], ['½ pot', game.currentBet + Math.round(pot / 2)], ['Pot', game.currentBet + pot], ['All in', maxTo]]
+      .forEach(([label, v]) => {
+        const clamped = Math.min(maxTo, Math.max(minTo, v));
+        presets.appendChild(btn('tiny ghost', label, () => { slider.value = String(clamped); amt.textContent = fmt(clamped); }));
+      });
+
+    const go = btn('', owe === 0 ? 'Bet' : 'Raise to', () => {
+      const r = game.raiseTo(parseInt(slider.value, 10));
+      if (!r.ok) { toast(r.why); return; }
+      Sound.chip(); afterBet();
     });
+    go.classList.add('raise-go');
+    go.appendChild(amt);
+
+    raiseRow.appendChild(presets);
+    raiseRow.appendChild(slider);
+    raiseRow.appendChild(go);
+    box.appendChild(raiseRow);
   }
 
-  /* ----------------------------------------------------------------- tray -- */
-
-  function renderTray() {
-    var tray = $('#tray-main');
-    tray.innerHTML = '';
-    if (game.phase === 'betting') renderBetting(tray);
-    else if (game.phase === 'gates') renderGates(tray);
-  }
-
-  function renderBetting(tray) {
-    var seat = game.actor, p = game.players[seat];
-    var owe = game.toCall(seat);
-    var maxTo = p.bet + p.points;
-
-    tray.appendChild(buildFaceDown(seat));
-
-    var row = el('div', 'row');
-    var fold = el('button', 'btn danger', 'Fold');
-    fold.type = 'button';
-    fold.onclick = function () { Sound.fold(); game.fold(); afterBet(); };
-    row.appendChild(fold);
-
-    var call = el('button', 'btn primary',
-      owe === 0 ? 'Check' : owe >= p.points ? 'Call all in · ' + owe : 'Call ' + owe);
-    call.type = 'button';
-    call.onclick = function () { if (owe > 0) Sound.chip(); game.call(); afterBet(); };
-    row.appendChild(call);
-    tray.appendChild(row);
-
-    if (maxTo > game.currentBet) {
-      var minTo = game.minRaiseTo(seat);
-      var betRow = el('div', 'bet-row');
-      var slider = document.createElement('input');
-      slider.type = 'range';
-      slider.min = String(minTo); slider.max = String(maxTo); slider.step = '1';
-      slider.value = String(Math.min(maxTo, minTo));
-      slider.setAttribute('aria-label', 'Raise to');
-
-      var amt = el('span', 'bet-amt', slider.value);
-      slider.oninput = function () { amt.textContent = slider.value; };
-
-      var go = el('button', 'btn', 'Raise');
-      go.type = 'button';
-      go.onclick = function () {
-        var r = game.raiseTo(parseInt(slider.value, 10));
-        if (!r.ok) { $('#prompt').textContent = r.why; return; }
-        Sound.chip(); afterBet();
-      };
-      var shove = el('button', 'btn', 'All in');
-      shove.type = 'button';
-      shove.onclick = function () { game.raiseTo(maxTo); Sound.chip(); afterBet(); };
-
-      betRow.appendChild(amt); betRow.appendChild(slider);
-      betRow.appendChild(go); betRow.appendChild(shove);
-      tray.appendChild(betRow);
-    }
-  }
-
-  function buildFaceDown(seat) {
-    var wrap = el('div', 'facedown');
-    var btn = el('button', 'facedown-btn');
-    btn.type = 'button';
-    var cards = el('div', 'fd-cards');
-    for (var i = 0; i < game.handSize(seat); i++) cards.appendChild(el('div', 'fd-card'));
-    btn.appendChild(cards);
-    btn.appendChild(el('span', 'fd-label', 'Your hand — look'));
-    btn.setAttribute('aria-label', 'Look at your cards');
-    btn.onclick = function () { openPeek(seat); };
-    wrap.appendChild(btn);
-    return wrap;
-  }
-
-  function afterBet() {
-    selectedCard = null; pickedCoins = []; hint = null;
-    sync();
-  }
-
-  function renderGates(tray) {
-    var seat = game.actor, p = game.players[seat];
-
-    var strip = el('div', 'hand-strip');
-    E.CARD_IDS.forEach(function (id) {
-      var count = p.hand[id] || 0;
-      strip.appendChild(buildCard(id, count, {
-        selected: selectedCard === id,
-        hinted: !!(hint && hint.card === id),
-        onPick: function () {
-          selectedCard = selectedCard === id ? null : id;
-          pickedCoins = [];
-          hint = null;
-          if (selectedCard) Sound.card();
-          render();
-        }
-      }));
-    });
-    tray.appendChild(strip);
-
-    var row = el('div', 'row');
-    var hintBtn = el('button', 'btn ghost', 'Hint');
-    hintBtn.type = 'button';
-    hintBtn.disabled = game.handSize(seat) === 0;
-    hintBtn.onclick = function () {
-      var best = game.bestPlay(seat);
-      if (!best || best.delta <= 0.001) {
-        hint = null;
-        $('#read').textContent = 'Nothing left that improves your odds — end your turn';
-        return;
-      }
-      hint = {
-        card: best.card, targets: best.targets,
-        label: E.CARDS[best.card].name + ' on ' +
-          best.targets.map(function (t) { return 'coin ' + (t + 1); }).join(' → ') +
-          ' — ' + best.text + ' (+' + best.delta.toFixed(1) + ')'
-      };
-      selectedCard = null; pickedCoins = [];
+  function renderGates(box, p) {
+    const row = el('div', 'row');
+    const h = btn('ghost', 'Hint', () => {
+      const best = game.hint(p.seat);
+      if (!best) { hint = null; toast('Nothing left that helps — press Done.'); return; }
+      hint = { card: best.card, targets: best.targets,
+        label: E.CARDS[best.card].name + ' on coin ' + best.targets.map((t) => t + 1).join(' then ') + ' — ' + best.text };
+      selectedCard = null; selectedIdx = -1; picked = [];
       render();
-    };
-    row.appendChild(hintBtn);
-
-    var end = el('button', 'btn primary', 'End turn');
-    end.type = 'button';
-    end.onclick = function () {
-      selectedCard = null; pickedCoins = []; hint = null;
+    });
+    h.disabled = !p.hand.length;
+    row.appendChild(h);
+    row.appendChild(btn('primary', 'Done', () => {
+      selectedCard = null; selectedIdx = -1; picked = []; hint = null;
       Sound.card();
       game.endTurn();
       sync();
-    };
-    row.appendChild(end);
-    tray.appendChild(row);
-  }
-
-  /**
-   * A card that leans toward the cursor. Costs almost nothing and is most of
-   * the reason a card game feels like objects rather than buttons.
-   */
-  function buildCard(id, count, opts) {
-    var card = E.CARDS[id];
-    var node = el('button', 'card' +
-      (opts.selected ? ' selected' : '') + (opts.hinted ? ' hinted' : ''));
-    node.type = 'button';
-    node.disabled = count === 0 && !opts.static;
-    if (card.rare) node.classList.add('rare');
-    node.innerHTML =
-      '<span class="card-name">' + card.name + '</span>' +
-      Art.cardArt(id) +
-      '<span class="card-blurb">' + card.blurb + '</span>' +
-      (nerd ? '<span class="card-gate">' + card.gate + '</span>' : '');
-    if (card.rare) node.appendChild(el('span', 'rare-mark', 'rare'));
-    if (count > 1) node.appendChild(el('span', 'card-count', String(count)));
-    if (opts.onPick) node.onclick = opts.onPick;
-
-    if (!REDUCED) {
-      node.onpointermove = function (ev) {
-        var r = node.getBoundingClientRect();
-        var px = (ev.clientX - r.left) / r.width - 0.5;
-        var py = (ev.clientY - r.top) / r.height - 0.5;
-        node.style.transform =
-          'translateY(-10px) rotateX(' + (-py * 13).toFixed(2) + 'deg) rotateY(' +
-          (px * 15).toFixed(2) + 'deg)';
-      };
-      node.onpointerleave = function () { node.style.transform = ''; };
-    }
-    return node;
+    }));
+    box.appendChild(row);
   }
 
   /* -------------------------------------------------------------- curtain -- */
 
-  function openCurtain(seat, done) {
-    var p = game.players[seat];
-    $('#curtain-sigil').innerHTML = Art.sigil(p.sigil);
+  function openCurtain(p, done) {
     $('#curtain-name').textContent = p.name;
     show($('#curtain'));
-    $('#curtain-go').onclick = function () { hide($('#curtain')); Sound.card(); done(); };
-    $('#curtain-go').focus();
+    const go = $('#curtain-go');
+    go.onclick = () => { hide($('#curtain')); Sound.card(); done(); };
+    go.focus();
   }
-
-  function openPeek(seat) {
-    var p = game.players[seat];
-    var strip = $('#peek-hand');
-    strip.innerHTML = '';
-    E.CARD_IDS.forEach(function (id) {
-      var count = p.hand[id] || 0;
-      if (!count) return;
-      strip.appendChild(buildCard(id, count, { static: true }));
-    });
-    $('#peek-sub').textContent = 'Held by ' + p.name + '. Hides shortly.';
-    show($('#peek'));
-    Sound.card();
-    clearTimeout(peekTimer);
-    peekTimer = setTimeout(closePeek, 7000);
-  }
-
-  function closePeek() { clearTimeout(peekTimer); hide($('#peek')); }
 
   /* ------------------------------------------------------------- showdown -- */
 
-  var sdTimers = [];
+  let sdTimers = [];
 
   function openShowdown() {
-    var body = $('#showdown-body');
+    recordHand();
+    const body = $('#sd-body');
     body.innerHTML = '';
     $('#sd-summary').textContent = '';
-    sdTimers.forEach(clearTimeout);
-    sdTimers = [];
+    sdTimers.forEach(clearTimeout); sdTimers = [];
+    $('#sd-title').textContent = game.results.uncontested ? 'Everyone folded' : 'Showdown';
+    hide($('#sd-next')); show($('#sd-skip'));
 
-    $('#showdown-title').textContent = game.results.uncontested ? 'Everyone folded' : 'Showdown';
-    $('#showdown-next').hidden = true;
-    $('#showdown-skip').hidden = false;
+    const contenders = game.players.filter((p) => p.score !== null);
+    if (!contenders.length) {
+      const w = game.players[game.results.pots[0].winners[0]];
+      body.appendChild(el('p', 'muted', w.name + ' takes the pot without a fight.'));
+      show($('#showdown')); finishShowdown(); return;
+    }
 
-    var contenders = game.players.filter(function (p) { return p.score !== null; });
-    if (!contenders.length) { show($('#showdown')); finishShowdown(); return; }
+    const bestKey = Math.max(...contenders.map((p) => p.rankKey));
+    const rows = [];
+    let delay = 0;
+    const step = REDUCED ? 0 : 230;
 
-    var best = Math.max.apply(null, contenders.map(function (p) { return p.score; }));
-    var rows = [];
-    var delay = 0, step = REDUCED ? 0 : 260;
-
-    contenders.forEach(function (p) {
-      var sec = el('div', 'sd-player');
-      var head = el('div', 'sd-head');
-      head.innerHTML = Art.sigil(p.sigil);
+    contenders.forEach((p) => {
+      const sec = el('div', 'sd-player');
+      const head = el('div', 'sd-head');
+      head.innerHTML = Art.avatar(p.avatar);
       head.appendChild(el('span', 'nm', p.name));
+      const plays = el('span', 'sd-plays');
+      if (p.plays.length) p.plays.forEach((pl) => plays.appendChild(el('span', 'play-chip', E.describePlay(pl.card, pl.targets))));
+      else plays.appendChild(el('span', 'play-chip none', 'no cards played'));
+      head.appendChild(plays);
       sec.appendChild(head);
 
-      var coins = el('div', 'sd-coins');
-      var nodes = [];
-      p.bits.forEach(function (bit) {
-        var c = el('div', 'sd-coin ' + (bit ? 'hit' : 'miss'));
-        c.innerHTML = bit ? Art.coinOne() : Art.coinZero();
+      const coins = el('div', 'sd-coins');
+      const nodes = [];
+      p.bits.forEach((bit, i) => {
+        const c = Art.coinNode(String(i + 1));
+        c.classList.add('mini');
         coins.appendChild(c);
-        nodes.push({ node: c, bit: bit });
+        nodes.push({ node: c, bit });
       });
       sec.appendChild(coins);
-
-      var rank = el('div', 'rank' + (p.score === 5 ? ' coherence' : ''), '');
+      const rank = el('div', 'rank');
       sec.appendChild(rank);
       body.appendChild(sec);
-      rows.push({ p: p, sec: sec, rank: rank, nodes: nodes });
+      const row = { p, sec, rank, nodes };
+      rows.push(row);
 
-      nodes.forEach(function (c) {
+      nodes.forEach((c) => {
         delay += step;
-        sdTimers.push(setTimeout(function () {
-          c.node.classList.add('shown');
+        sdTimers.push(setTimeout(() => {
+          Art.paintCoin(c.node, { kind: c.bit ? 'one' : 'zero' }, false);
           if (c.bit) Sound.coin(true); else Sound.thud();
         }, delay));
       });
-      delay += 140;
-      sdTimers.push(setTimeout(function () {
-        rank.innerHTML = E.rankName(p.score) + ' <span class="n">' + p.score + '</span>';
-        if (p.score === best) sec.classList.add('leader');
-        if (p.score === 5) Sound.coherence();
-      }, delay));
+      delay += 120;
+      sdTimers.push(setTimeout(() => revealRank(row, bestKey), delay));
     });
 
     show($('#showdown'));
-    delay += 380;
+    delay += 360;
     sdTimers.push(setTimeout(finishShowdown, delay));
 
-    $('#showdown-skip').onclick = function () {
-      sdTimers.forEach(clearTimeout);
-      sdTimers = [];
-      rows.forEach(function (r) {
-        r.nodes.forEach(function (c) { c.node.classList.add('shown'); });
-        r.rank.innerHTML = E.rankName(r.p.score) + ' <span class="n">' + r.p.score + '</span>';
-        if (r.p.score === best) r.sec.classList.add('leader');
+    $('#sd-skip').onclick = () => {
+      sdTimers.forEach(clearTimeout); sdTimers = [];
+      rows.forEach((r) => {
+        r.nodes.forEach((c) => Art.paintCoin(c.node, { kind: c.bit ? 'one' : 'zero' }, false));
+        revealRank(r, bestKey);
       });
       finishShowdown();
     };
   }
 
+  function revealRank(r, bestKey) {
+    r.rank.innerHTML = E.rankName(r.p.score) + ' <b class="mono">' + r.p.score + '</b>';
+    r.rank.classList.toggle('coherence', r.p.score === 5);
+    if (r.p.rankKey === bestKey) r.sec.classList.add('leader');
+    if (r.p.won > 0) r.rank.appendChild(el('span', 'won mono', '+' + fmt(r.p.won)));
+    if (r.p.score === 5) Sound.coherence();
+  }
+
   function finishShowdown() {
     $('#sd-summary').textContent = game.results.summary;
     Sound.win();
-    $('#showdown-skip').hidden = true;
-    var next = $('#showdown-next');
-    next.hidden = false;
-    next.textContent = game.gameOver() ? 'Settle up' : 'Next hand';
-    next.onclick = function () {
+    hide($('#sd-skip'));
+    const next = $('#sd-next');
+    show(next);
+    const done = game.finished();
+    next.textContent = done ? 'See results' : 'Next hand';
+    next.onclick = () => {
       hide($('#showdown'));
-      if (game.gameOver()) { Sound.bust(); openBank(); return; }
-      curtainedSeat = -1;
-      selectedCard = null; pickedCoins = []; hint = null;
-      potShown = 0;
+      if (done) { openResults(done); return; }
+      curtained = -1; selectedCard = null; selectedIdx = -1; picked = []; hint = null; peeking = false; potShown = 0;
       game.nextHand();
       Sound.card();
       sync();
@@ -844,285 +729,162 @@
     next.focus();
   }
 
-  /* ----------------------------------------------------------------- bank -- */
+  /* -------------------------------------------------------------- results -- */
 
-  function openBank() {
-    var body = $('#bank-body');
+  function openResults(reason) {
+    recordGame();
+    const me = game.players[0];
+    const standings = game.standings();
+    const place = standings.findIndex((p) => p.seat === 0) + 1;
+    const body = $('#res-body');
     body.innerHTML = '';
-    var sorted = game.players.slice().sort(function (a, b) { return b.points - a.points; });
-    var payouts = E.settlePool(sorted);
 
-    sorted.forEach(function (p, i) {
-      var row = el('div', 'bank-row');
-      var sig = el('span');
-      sig.innerHTML = Art.sigil(p.sigil);
-      row.appendChild(sig);
+    if (mode === 'daily') {
+      $('#res-eyebrow').textContent = 'Daily Deal #' + dailyNumber() + (dailyPractice ? ' · practice' : '');
+      $('#res-title').textContent = place === 1 ? 'You took the table' : ordinal(place) + ' of ' + game.n;
+    } else if (mode === 'quick') {
+      $('#res-eyebrow').textContent = 'Quick game · deal #' + game.seed;
+      $('#res-title').textContent = reason === 'busted' ? 'Busted on hand ' + game.handNo
+        : place === 1 ? 'You took the table' : ordinal(place) + ' of ' + game.n;
+    } else {
+      $('#res-eyebrow').textContent = 'Pass & play';
+      $('#res-title').textContent = standings[0].name + ' takes the table';
+    }
 
-      var mid = el('div');
-      mid.appendChild(el('div', 'bank-name', p.name + (p.points > 0 && i === 0 ? ' — takes the table' : '')));
-      var candy = el('div', 'bank-candy');
-      var any = false;
-      E.CANDY.forEach(function (c) {
-        if (!payouts[i][c.key]) return;
-        any = true;
-        var s = el('span');
-        s.innerHTML = Art.candy(c.key) + '<span>' + payouts[i][c.key] + '</span>';
-        s.className = 'candy-' + c.key;
-        candy.appendChild(s);
-      });
-      if (!any) candy.appendChild(el('span', '', 'nothing'));
-      mid.appendChild(candy);
-      row.appendChild(mid);
-
-      var delta = p.points - p.startPoints;
-      row.appendChild(el('span', 'bank-delta ' + (delta >= 0 ? 'up' : 'down'),
-        (delta >= 0 ? '+' : '') + delta));
-      body.appendChild(row);
+    const list = el('div', 'standings');
+    standings.forEach((p, i) => {
+      const row = el('div', 'stand-row' + (p.seat === 0 && mode !== 'hot' ? ' me' : ''));
+      row.innerHTML = '<span class="mono place">' + (i + 1) + '</span>' + Art.avatar(p.avatar) +
+        '<span class="nm">' + p.name + '</span>' +
+        '<span class="muted small">' + p.handsWon + ' hand' + (p.handsWon === 1 ? '' : 's') + ' won</span>' +
+        '<b class="mono">' + fmt(p.chips) + '</b>';
+      list.appendChild(row);
     });
+    body.appendChild(list);
 
-    show($('#bank'));
-    $('#bank-close').onclick = function () { hide($('#bank')); };
-    $('#bank-again').onclick = function () {
-      hide($('#bank'));
-      hide($('#screen-table'));
-      show($('#screen-setup'));
-      game = null;
+    if (mode !== 'hot') {
+      const grid = el('p', 'grid big');
+      grid.textContent = game.history.map((h) => h.winners.includes(0) ? (h.score === 5 ? '⭐' : '🟧') : '⬛').join('');
+      grid.title = 'Orange: you won the hand. Star: with Coherence.';
+      body.appendChild(grid);
+    }
+
+    const share = $('#res-share');
+    share.hidden = mode === 'hot';
+    share.textContent = mode === 'daily' ? 'Share result' : 'Copy challenge link';
+    share.onclick = () => {
+      const url = location.origin + location.pathname;
+      const text = mode === 'daily'
+        ? 'Quantum Hold’em · Daily #' + dailyNumber() + '\n' + (place === 1 ? '🏆 ' : '') + fmt(me.chips) + ' chips · ' +
+          ordinal(place) + ' of ' + game.n + '\n' + $('.grid.big').textContent + '\n' + url
+        : 'Beat my ' + fmt(me.chips) + ' chips on the same deals: ' + url + '?seed=' + game.seed + '&bots=' + (game.n - 1);
+      if (navigator.share && /Mobi/.test(navigator.userAgent)) navigator.share({ text }).catch(() => {});
+      else if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => toast('Copied to clipboard'), () => toast(text));
+      else toast(text);
     };
+    $('#res-again').onclick = () => {
+      hide($('#results'));
+      if (mode === 'daily') startDaily();
+      else if (mode === 'quick') { startQuick(); }
+      else startHot();
+    };
+    $('#res-home').onclick = goHome;
+    show($('#results'));
+    $('#res-again').focus();
   }
 
   /* ---------------------------------------------------------------- rules -- */
 
   function openRules() {
-    var coinRow = function (cls, art, name, text) {
-      return '<tr><td><span class="chip ' + cls + '">' + art + '</span>' + name + '</td><td>' + text + '</td></tr>';
-    };
+    const coinRow = (kind, badge, name, text) =>
+      '<tr><td><span class="coin mini static" data-kind="' + kind + '"><span class="coin-disc"><span class="coin-face front">1</span>' +
+      '<span class="coin-face back">0</span></span><span class="coin-badge"' + (badge ? '' : ' hidden') + '>' + badge + '</span></span>' +
+      '<b>' + name + '</b></td><td>' + text + '</td></tr>';
+
     $('#rules-body').innerHTML =
-      '<div><h3>The point</h3><p>Five cursed coins lie on the table. At the end of the hand they all ' +
-      'land. Every coin showing its <b>face</b> is one point, and the most points takes the pot. ' +
-      'You bet candy between each coin, exactly as you would at poker.</p></div>' +
+      '<section><h3>The goal</h3><p>Five coins are dealt to the table. At showdown every coin lands on a 1 or a 0. ' +
+      'Each 1 is a point; most points takes the pot. You bet chips between reveals exactly as in Texas Hold’em.</p></section>' +
 
-      '<div><h3>Reading a coin</h3><table class="rules-table">' +
-      coinRow('up', Art.coinOne(), 'Settled on 1', 'A point, banked. Only your own card can spoil it.') +
-      coinRow('down', Art.coinZero(), 'Settled on 0', 'Worth nothing unless you turn it.') +
-      '<tr><td>↻ &nbsp;Spinning</td><td>Even money — a qubit in superposition. Which way it turns decides which card can catch it.</td></tr>' +
-      '<tr><td>Linked</td><td>Two coins entangled. They always settle alike — or always opposed.</td></tr>' +
-      '</table></div>' +
+      '<section><h3>Reading a coin</h3><table>' +
+      coinRow('one', '', 'Settled on 1', 'A sure point. Only your own card can spoil it.') +
+      coinRow('zero', '', 'Settled on 0', 'Worth nothing unless you change it.') +
+      coinRow('plus', '+', 'Spinning +', '50/50. A qubit in superposition. Its + tilt decides what Spin does to it.') +
+      coinRow('minus', '−', 'Spinning −', '50/50 too, but tilted the other way. Spin lands this one on 1.') +
+      coinRow('mixed', '= 2', 'Linked', 'Entangled with another coin: they always land the same, or always opposite.') +
+      '</table></section>' +
 
-      '<div><h3>Your cards</h3><table class="rules-table">' +
-      E.CARD_IDS.map(function (id) {
-        var c = E.CARDS[id];
-        return '<tr><td><span class="rules-mini">' + Art.cardArt(id) + '<b>' + c.name + '</b></span></td>' +
-          '<td>' + c.blurb + '</td></tr>';
+      '<section><h3>Your cards</h3><table class="cards-table">' +
+      E.CARD_ORDER.map((id) => {
+        const c = E.CARDS[id];
+        return '<tr><td><span class="rules-card">' + Art.gate(id) + '</span><b>' + c.name + '</b>' +
+          '<span class="mono tiny-gate">' + c.gate + '</span></td><td>' + c.blurb + '</td></tr>';
       }).join('') +
-      '</table><p>Three each, dealt face down, played after the final bet. Flip, Haunt and Bind undo ' +
-      'themselves — play one twice and nothing has happened. <b>Summon does not.</b> It walks a coin ' +
-      'round a loop of four — 0, ↻, 1, ↺ — so a second Summon throws away the point you just won.</p>' +
+      '</table><p>Three cards each, dealt before the first bet. After the river, every player still in plays any of ' +
+      'their cards on <b>their own copy</b> of the five coins. Hover a coin with a card selected and the table tells you ' +
+      'exactly what will happen. <b>Hint</b> plays the best card for you.</p></section>' +
 
-      '<p><b>The Observer</b> is the exception to everything. There is only ever one, and most hands ' +
-      'do not contain it at all. It does not change a coin — it <b>measures</b> one, on every board at ' +
-      'the table at once. Whatever each player&rsquo;s copy of that coin was doing, it stops: ' +
-      'superposition gone, links broken, the value fixed. Play it on a coin you have already settled ' +
-      'on 1 and you keep your point while everyone still holding it in superposition gets a coin ' +
-      'toss and no way back.</p></div>' +
+      '<section><h3>A hand</h3><ol>' +
+      '<li><b>Deal</b> — blinds go in, three cards each, first bets. No coins showing yet.</li>' +
+      '<li><b>Flop</b> — three coins turn over. Bets.</li>' +
+      '<li><b>Turn</b> — a fourth coin. Bets.</li>' +
+      '<li><b>River</b> — the fifth. Last bets.</li>' +
+      '<li><b>Cards</b> — everyone left rigs their own copy of the coins.</li>' +
+      '<li><b>Showdown</b> — every copy lands. Count the 1s.</li></ol></section>' +
 
-      '<div><h3>The candy</h3><table class="rules-table">' +
-      E.CANDY.map(function (c) {
-        return '<tr><td><span class="rules-mini candy-' + c.key + '">' + Art.candy(c.key) +
-          '</span> ' + c.name + '</td><td class="val">' + c.value + '</td></tr>';
-      }).join('') +
-      '</table><p>Two hundred points each to start. Blinds double every six hands, so the night ends ' +
-      'before the candy does. Keep score here; move the sweets for real.</p></div>' +
+      '<section><h3>Ranks</h3><p>' +
+      E.RANKS.map((r, i) => '<span class="rank-pill"><b class="mono">' + i + '</b> ' + r + '</span>').join(' ') +
+      '</p><p>Tied on count? A 1 further left wins — coin 1 is the ace. Identical boards split the pot. ' +
+      'Blinds double every five hands so a game ends.</p></section>' +
 
-      '<div><h3>Hand ranks</h3><p>' +
-      E.RANKS.map(function (r, i) { return i + ' → <b>' + r + '</b>'; }).join(' &nbsp;·&nbsp; ') +
-      '</p></div>' +
-
-      '<div><h3>Underneath</h3><p>The coins are qubits and the cards are quantum gates — Flip is X, ' +
-      'Haunt is Hadamard, Summon is ZH, Bind is CNOT, and the Observer is measurement itself. ' +
-      'Spinning is superposition; linked is entanglement. The card art is the circuit notation: ' +
-      'Bind is a real CNOT symbol, the Observer a real measurement gate. Press <b>Ψ</b> for the ' +
-      'states and the numbers. You need none of it to win.</p></div>' +
-
-      '<div><h3>Rather be shown?</h3><p id="rules-watch-line">' +
-      'There is a minute-and-a-half walk-through of all of this.</p></div>';
-
-    var watch = el('button', 'btn');
-    watch.type = 'button';
-    watch.textContent = 'Watch the rules';
-    watch.onclick = function () { hide($('#rules')); openFilm(); };
-    $('#rules-watch-line').appendChild(document.createElement('br'));
-    $('#rules-watch-line').appendChild(watch);
+      '<section><h3>Underneath</h3><p>The coins are qubits and the cards are gates: Flip is <span class="mono">X</span>, ' +
+      'Spin is the Hadamard <span class="mono">H</span>, Twist is <span class="mono">Z</span>, Link is <span class="mono">CNOT</span> ' +
+      'and Collapse is a projective measurement. Spinning is superposition, the ± tilt is relative phase, ' +
+      'linked is a Bell pair, and Spin landing a + on 0 is interference. Press <b>Ψ</b> at the table for the kets and ' +
+      'probabilities. You need none of it to win.</p></section>';
 
     show($('#rules'));
-    $('#rules-close').onclick = function () { hide($('#rules')); };
-  }
-
-  /* ----------------------------------------------------------------- film -- */
-
-  /**
-   * The rules, as a short film. Watching is the default way in; the hands-on
-   * practice hand is offered at the end for anyone who wants to try it before
-   * sitting down with other people's candy.
-   */
-  function openFilm() {
-    var midGame = !!game;
-    global.Film.open({
-      onDone: function (next) {
-        store('tutorial', '1');
-        if (midGame) return;              // already at a table; just go back to it
-        if (next === 'practice') startTutorial();
-        else if (next === true) startGame();
-      }
-    });
-  }
-
-  /* ------------------------------------------------------------- practice -- */
-
-  var tut = null;
-
-  var TUT_STEPS = [
-    {
-      title: 'The coins',
-      text: 'Two cursed coins. The left one landed <b>face-up</b> — a point, already yours. ' +
-            'The right one is still <b>spinning</b>: a coin flip, worth half a point on average.',
-      next: 'Go on'
-    },
-    {
-      title: 'What you want',
-      text: 'Coins face-up when the spinning stops. A spinning coin is not bad luck — it is the ' +
-            '<b>opening</b>, because the right card can catch it mid-turn.',
-      next: 'Show me'
-    },
-    {
-      title: 'Play a card',
-      text: 'You hold a <b>Summon</b>. It catches a coin turning <b>clockwise ↻</b> and pins it face-up. ' +
-            'Take the card, then tap the spinning coin.',
-      interactive: true
-    },
-    {
-      title: 'Both face-up',
-      text: 'Two coins, two points. That is the whole game — the rest is betting candy on whether ' +
-            'your coins will beat everyone else&rsquo;s.',
-      next: 'Deal me in'
-    }
-  ];
-
-  function startTutorial() {
-    tut = { step: 0, state: new Q.QState(2), armed: false };
-    tut.state.x(0);
-    tut.state.h(1);
-    show($('#tutorial'));
-    renderTutorial();
-    $('#tut-quit').onclick = function () { hide($('#tutorial')); tut = null; };
-  }
-
-  function renderTutorial() {
-    var step = TUT_STEPS[tut.step];
-    $('#tut-step').textContent = 'Step ' + (tut.step + 1) + ' of ' + TUT_STEPS.length;
-    $('#tut-title').textContent = step.title;
-    $('#tut-text').innerHTML = step.text;
-
-    var row = $('#tut-coins');
-    row.innerHTML = '';
-    for (var i = 0; i < 2; i++) {
-      (function (idx) {
-        var info = Q.readCoin(tut.state, idx);
-        var slot = el('button', 'coin-slot' + (step.interactive && tut.armed ? ' pickable' : ''));
-        slot.type = 'button';
-        slot.disabled = !(step.interactive && tut.armed);
-
-        var shell = el('div', 'coin-shell');
-        var coin = el('div', 'coin');
-        coin.dataset.kind = info.kind;
-        var d3 = el('div', 'coin-3d');
-        var edge = el('div', 'coin-edge');
-        var f = el('div', 'coin-face coin-front'); f.innerHTML = Art.coinOne();
-        var b = el('div', 'coin-face coin-back'); b.innerHTML = Art.coinZero();
-        d3.appendChild(edge); d3.appendChild(f); d3.appendChild(b);
-        coin.appendChild(d3); shell.appendChild(coin);
-
-        var meta = el('div', 'coin-meta');
-        meta.appendChild(el('span', 'coin-tag ' + tagClass(info.kind, null), tagText(info.kind, null)));
-        slot.appendChild(shell); slot.appendChild(meta);
-
-        slot.onclick = function () {
-          if (idx !== 1) {
-            $('#tut-text').innerHTML = 'That one is already face-up. Try the <b>spinning</b> coin.';
-            return;
-          }
-          tut.state.zh(1);
-          tut.armed = false;
-          tut.step = 3;
-          Sound.cast();
-          renderTutorial();
-          setTimeout(function () { Sound.coin(true); }, 320);
-        };
-        row.appendChild(slot);
-      })(i);
-    }
-
-    var hand = $('#tut-hand');
-    hand.innerHTML = '';
-    if (step.interactive) {
-      hand.appendChild(buildCard('SUMMON', 1, {
-        selected: tut.armed, static: true,
-        onPick: function () { tut.armed = !tut.armed; if (tut.armed) Sound.card(); renderTutorial(); }
-      }));
-    }
-
-    var next = $('#tut-next');
-    next.hidden = !!step.interactive;
-    next.textContent = step.next || 'Next';
-    next.onclick = function () {
-      if (tut.step >= TUT_STEPS.length - 1) {
-        hide($('#tutorial'));
-        tut = null;
-        store('tutorial', '1');
-        startGame();
-        return;
-      }
-      tut.step++;
-      renderTutorial();
-    };
+    $('#rules-close').onclick = () => hide($('#rules'));
+    $('#rules-close').focus();
   }
 
   /* ----------------------------------------------------------------- boot -- */
 
-  var SPEAKER_ON = '<svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M19 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
-  var SPEAKER_OFF = '<svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16 9.5l5 5m0-5l-5 5" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>';
-
   function paintSoundBtn() {
-    var b = $('#btn-sound');
-    b.innerHTML = Sound.isOn() ? SPEAKER_ON : SPEAKER_OFF;
+    const b = $('#btn-sound');
+    b.innerHTML = Art.icon(Sound.isOn() ? 'sound' : 'muted');
     b.setAttribute('aria-pressed', Sound.isOn() ? 'true' : 'false');
     b.title = Sound.isOn() ? 'Sound on' : 'Sound off';
   }
 
   function boot() {
-    initSetup();
+    initHome();
     paintSoundBtn();
-
-    $('#btn-sound').onclick = function () { Sound.toggle(); paintSoundBtn(); };
-    $('#btn-nerd').onclick = function () {
-      nerd = !nerd;
-      store('nerd', nerd ? '1' : '0');
-      render();
+    $('#btn-home').innerHTML = Art.icon('home');
+    $('#btn-home').onclick = () => {
+      if (!game || game.phase === 'over' || confirm('Leave the table? This game will not be saved.')) goHome();
     };
+    $('#btn-sound').onclick = () => { Sound.toggle(); paintSoundBtn(); };
+    $('#btn-nerd').onclick = () => { nerd = !nerd; save('nerd', nerd); render(); };
     $('#btn-rules').onclick = openRules;
-    $('#rules-close').onclick = function () { hide($('#rules')); };
-    global.Film.boot();
-    $('#peek-close').onclick = closePeek;
 
-    global.addEventListener('resize', function () {
-      if (game) render(); else requestAnimationFrame(drawChains);
-    });
-    document.addEventListener('keydown', function (ev) {
-      if (ev.key !== 'Escape') return;
-      ['#peek', '#rules', '#bank'].forEach(function (s) { hide($(s)); });
+    window.addEventListener('resize', () => { if (game) requestAnimationFrame(drawLinks); });
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') { hide($('#rules')); if (selectedCard) { selectedCard = null; selectedIdx = -1; picked = []; render(); } return; }
+      if (!game || ev.target.tagName === 'INPUT' || document.querySelector('.overlay:not([hidden])')) return;
+      const p = game.current();
+      if (!p || p.bot || p.seat !== focusSeat()) return;
+      const k = ev.key.toLowerCase();
+      if (game.phase === 'betting') {
+        if (k === 'f') { game.fold(); afterBet(); }
+        else if (k === 'c' || ev.key === 'Enter') { game.call(); afterBet(); }
+      } else if (game.phase === 'gates') {
+        if (ev.key === 'Enter') { game.endTurn(); sync(); }
+        else if (k === 'h') { const b = $('#actions .ghost'); if (b) b.click(); }
+      }
     });
   }
 
-  global.UI = { boot: boot, sync: sync, render: render, get game() { return game; } };
+  root.UI = { boot, get game() { return game; } };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
   else boot();

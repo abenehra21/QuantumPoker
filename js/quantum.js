@@ -1,225 +1,217 @@
 /*
- * Quantum Poker
- * quantum.js : an exact state-vector simulator for the coins on the table.
+ * Quantum Hold'em — quantum.js
+ * An exact state-vector simulator for the five coins on the table.
  *
- * The whole game lives in a tiny corner of quantum mechanics, so this is a
- * complete and honest simulation rather than an approximation: an array of
- * 2^n complex amplitudes with the real gates applied to it. For n = 5 that
- * is 32 numbers, which a browser does not notice.
+ * The coins are qubits. This keeps all 2^n complex amplitudes and applies the
+ * real gate matrices to them, so every probability the table shows is the
+ * genuine quantum answer. For n = 5 that is 32 numbers.
  *
- * Qubit 0 is the least significant bit of the basis index, matching the
- * Qiskit convention used by the original Python implementation in Python/.
+ * Qubit 0 is the least significant bit of the basis index (Qiskit order),
+ * matching the original SINTEF implementation in Python/.
  *
- * Copyright (C) 2026 — released under the GNU GPL v3, like the rest of this
- * repository. Original game by Fuchs, Falch & Johnsen (SINTEF); see README.
+ * No DOM in here. Runs in the browser and in Node.
  */
-(function (global) {
+(function (root) {
   'use strict';
 
-  var R2 = Math.SQRT1_2;
-  var EPS = 1e-9;
+  const R2 = Math.SQRT1_2;
+  const LOOSE = 1e-6;
 
-  /* ------------------------------------------------------------------ *
-   * State vector
-   * ------------------------------------------------------------------ */
+  class QState {
+    constructor(n) {
+      this.n = n;
+      this.size = 1 << n;
+      this.re = new Float64Array(this.size);
+      this.im = new Float64Array(this.size);
+      this.re[0] = 1; // |00…0⟩
+    }
 
-  function QState(n) {
-    this.n = n;
-    this.size = 1 << n;
-    this.re = new Float64Array(this.size);
-    this.im = new Float64Array(this.size);
-    this.re[0] = 1; // |00…0>
+    clone() {
+      const s = new QState(this.n);
+      s.re.set(this.re);
+      s.im.set(this.im);
+      return s;
+    }
+
+    /** Pauli X: 0 ↔ 1. A spinning coin is unchanged. */
+    x(q) {
+      const b = 1 << q;
+      for (let i = 0; i < this.size; i++) {
+        if (i & b) continue;
+        const j = i | b;
+        let t = this.re[i]; this.re[i] = this.re[j]; this.re[j] = t;
+        t = this.im[i]; this.im[i] = this.im[j]; this.im[j] = t;
+      }
+    }
+
+    /** Pauli Z: + ↔ −. A settled coin is unchanged. */
+    z(q) {
+      const b = 1 << q;
+      for (let i = 0; i < this.size; i++) {
+        if (i & b) { this.re[i] = -this.re[i]; this.im[i] = -this.im[i]; }
+      }
+    }
+
+    /** Hadamard: 0 ↔ +, 1 ↔ −. */
+    h(q) {
+      const b = 1 << q;
+      for (let i = 0; i < this.size; i++) {
+        if (i & b) continue;
+        const j = i | b;
+        const ar = this.re[i], ai = this.im[i], br = this.re[j], bi = this.im[j];
+        this.re[i] = (ar + br) * R2; this.im[i] = (ai + bi) * R2;
+        this.re[j] = (ar - br) * R2; this.im[j] = (ai - bi) * R2;
+      }
+    }
+
+    /** Controlled NOT: flips t when c is 1; entangles when c is spinning. */
+    cx(c, t) {
+      if (c === t) throw new Error('cx: control and target must differ');
+      const bc = 1 << c, bt = 1 << t;
+      for (let i = 0; i < this.size; i++) {
+        if (!(i & bc) || (i & bt)) continue;
+        const j = i | bt;
+        let tmp = this.re[i]; this.re[i] = this.re[j]; this.re[j] = tmp;
+        tmp = this.im[i]; this.im[i] = this.im[j]; this.im[j] = tmp;
+      }
+    }
+
+    /** Probability that coin q measures 1. */
+    probOne(q) {
+      const b = 1 << q;
+      let p = 0;
+      for (let i = 0; i < this.size; i++) {
+        if (i & b) p += this.re[i] * this.re[i] + this.im[i] * this.im[i];
+      }
+      return p;
+    }
+
+    /** Probability of |−⟩ in the ± basis: 0 → +, 1 → −, 0.5 → settled. */
+    probMinus(q) {
+      const b = 1 << q;
+      let p = 0;
+      for (let i = 0; i < this.size; i++) {
+        if (i & b) continue;
+        const j = i | b;
+        const dr = this.re[i] - this.re[j], di = this.im[i] - this.im[j];
+        p += dr * dr + di * di;
+      }
+      return p / 2;
+    }
+
+    /**
+     * Weight of the pair (a, b) on each Bell state, in the order
+     * |00⟩+|11⟩, |00⟩−|11⟩, |01⟩+|10⟩, |01⟩−|10⟩. A 1 means perfectly linked.
+     */
+    bellProbs(qa, qb) {
+      const ba = 1 << qa, bb = 1 << qb;
+      const p = [0, 0, 0, 0];
+      for (let k = 0; k < this.size; k++) {
+        if ((k & ba) || (k & bb)) continue;
+        const a = k, b = k | ba, c = k | bb, d = k | ba | bb;
+        let r = this.re[a] + this.re[d], m = this.im[a] + this.im[d]; p[0] += r * r + m * m;
+        r = this.re[a] - this.re[d]; m = this.im[a] - this.im[d]; p[1] += r * r + m * m;
+        r = this.re[b] + this.re[c]; m = this.im[b] + this.im[c]; p[2] += r * r + m * m;
+        r = this.re[b] - this.re[c]; m = this.im[b] - this.im[c]; p[3] += r * r + m * m;
+      }
+      return p.map((v) => v / 2);
+    }
+
+    /**
+     * Project coin q onto `bit` and renormalise. Returns the probability that
+     * outcome had; 0 means it was impossible and the state is left untouched.
+     * This is a real projective measurement: every superposition and link
+     * through this coin is destroyed.
+     */
+    project(q, bit) {
+      const b = 1 << q;
+      const p1 = this.probOne(q);
+      const keep = bit ? p1 : 1 - p1;
+      if (keep < 1e-12) return 0;
+      const scale = 1 / Math.sqrt(keep);
+      for (let i = 0; i < this.size; i++) {
+        if (((i & b) ? 1 : 0) === bit) { this.re[i] *= scale; this.im[i] *= scale; }
+        else { this.re[i] = 0; this.im[i] = 0; }
+      }
+      return keep;
+    }
+
+    /** Measure one coin with a random outcome and keep the collapsed state. */
+    collapse(q, rng) {
+      const p1 = this.probOne(q);
+      let bit = rng() < p1 ? 1 : 0;
+      if (!this.project(q, bit)) { bit = 1 - bit; this.project(q, bit); }
+      return bit;
+    }
+
+    /** True when the two states are equal up to a global phase: |⟨a|b⟩|² = 1. */
+    same(o) {
+      let re = 0, im = 0;
+      for (let i = 0; i < this.size; i++) {
+        re += this.re[i] * o.re[i] + this.im[i] * o.im[i];
+        im += this.re[i] * o.im[i] - this.im[i] * o.re[i];
+      }
+      return re * re + im * im > 1 - 1e-9;
+    }
+
+    /** Total probability. Always 1; the self-checks verify it. */
+    norm() {
+      let s = 0;
+      for (let i = 0; i < this.size; i++) s += this.re[i] * this.re[i] + this.im[i] * this.im[i];
+      return s;
+    }
+
+    /** Collapse the whole board once. Returns n bits, coin 0 first. */
+    measure(rng) {
+      const r = rng();
+      let acc = 0, chosen = this.size - 1;
+      for (let i = 0; i < this.size; i++) {
+        acc += this.re[i] * this.re[i] + this.im[i] * this.im[i];
+        if (r <= acc) { chosen = i; break; }
+      }
+      const bits = [];
+      for (let k = 0; k < this.n; k++) bits.push((chosen >> k) & 1);
+      return bits;
+    }
   }
-
-  QState.prototype.clone = function () {
-    var s = new QState(this.n);
-    s.re.set(this.re);
-    s.im.set(this.im);
-    return s;
-  };
-
-  /** Pauli X — flips a resting coin over, ignores a spinning one. */
-  QState.prototype.x = function (q) {
-    var b = 1 << q, i, j, t;
-    for (i = 0; i < this.size; i++) {
-      if (i & b) continue;
-      j = i | b;
-      t = this.re[i]; this.re[i] = this.re[j]; this.re[j] = t;
-      t = this.im[i]; this.im[i] = this.im[j]; this.im[j] = t;
-    }
-  };
-
-  /** Pauli Z — reverses the direction of a spin, ignores a resting coin. */
-  QState.prototype.z = function (q) {
-    var b = 1 << q, i;
-    for (i = 0; i < this.size; i++) {
-      if (i & b) { this.re[i] = -this.re[i]; this.im[i] = -this.im[i]; }
-    }
-  };
-
-  /** Hadamard — starts a resting coin spinning, or stops a spinning one. */
-  QState.prototype.h = function (q) {
-    var b = 1 << q, i, j, ar, ai, br, bi;
-    for (i = 0; i < this.size; i++) {
-      if (i & b) continue;
-      j = i | b;
-      ar = this.re[i]; ai = this.im[i];
-      br = this.re[j]; bi = this.im[j];
-      this.re[i] = (ar + br) * R2; this.im[i] = (ai + bi) * R2;
-      this.re[j] = (ar - br) * R2; this.im[j] = (ai - bi) * R2;
-    }
-  };
-
-  /** Z then H — catches a clockwise spin face-up. The "Summon" card. */
-  QState.prototype.zh = function (q) {
-    this.z(q);
-    this.h(q);
-  };
-
-  /** Controlled NOT — chains two coins together, or breaks the chain. */
-  QState.prototype.cx = function (c, t) {
-    if (c === t) throw new Error('cx: control and target must differ');
-    var bc = 1 << c, bt = 1 << t, i, j, tmp;
-    for (i = 0; i < this.size; i++) {
-      if (!(i & bc) || (i & bt)) continue;
-      j = i | bt;
-      tmp = this.re[i]; this.re[i] = this.re[j]; this.re[j] = tmp;
-      tmp = this.im[i]; this.im[i] = this.im[j]; this.im[j] = tmp;
-    }
-  };
-
-  /** Probability that coin q lands face-up (i.e. measures |1>). */
-  QState.prototype.probOne = function (q) {
-    var b = 1 << q, p = 0, i;
-    for (i = 0; i < this.size; i++) {
-      if (i & b) p += this.re[i] * this.re[i] + this.im[i] * this.im[i];
-    }
-    return p;
-  };
-
-  /**
-   * Probability of measuring |-> in the +/- basis, i.e. how
-   * counter-clockwise the spin is. 0 => |+>, 1 => |->, 0.5 => resting.
-   */
-  QState.prototype.probMinus = function (q) {
-    var b = 1 << q, p = 0, i, j, dr, di;
-    for (i = 0; i < this.size; i++) {
-      if (i & b) continue;
-      j = i | b;
-      dr = this.re[i] - this.re[j];
-      di = this.im[i] - this.im[j];
-      p += dr * dr + di * di;
-    }
-    return p / 2;
-  };
-
-  /**
-   * Probabilities that the pair (i, j) is in each of the four Bell states,
-   * in the order  |00>+|11>, |00>-|11>, |01>+|10>, |01>-|10>.
-   * A value of 1 means the two coins are perfectly chained.
-   */
-  QState.prototype.bellProbs = function (qa, qb) {
-    var ba = 1 << qa, bb = 1 << qb;
-    var p = [0, 0, 0, 0];
-    var k, a, b, c, d, r, m;
-    for (k = 0; k < this.size; k++) {
-      if ((k & ba) || (k & bb)) continue;
-      a = k; b = k | ba; c = k | bb; d = k | ba | bb;
-      r = this.re[a] + this.re[d]; m = this.im[a] + this.im[d]; p[0] += r * r + m * m;
-      r = this.re[a] - this.re[d]; m = this.im[a] - this.im[d]; p[1] += r * r + m * m;
-      r = this.re[b] + this.re[c]; m = this.im[b] + this.im[c]; p[2] += r * r + m * m;
-      r = this.re[b] - this.re[c]; m = this.im[b] - this.im[c]; p[3] += r * r + m * m;
-    }
-    return [p[0] / 2, p[1] / 2, p[2] / 2, p[3] / 2];
-  };
-
-  /**
-   * Measure one qubit and keep the collapsed state — the real thing, not a
-   * display trick. The branch that disagrees with the outcome is zeroed and
-   * what remains is renormalised, so every superposition and every chain that
-   * involved this qubit is genuinely destroyed.
-   *
-   * This is what the Observer card does, and it is why the card is worth
-   * holding: it takes the choice away from everyone else.
-   */
-  QState.prototype.collapse = function (q, rng) {
-    var b = 1 << q;
-    var p1 = this.probOne(q);
-    var bit = (rng() < p1) ? 1 : 0;
-    var keep = bit ? p1 : 1 - p1;
-    if (keep < 1e-12) {           // the chosen branch has no amplitude; take the other
-      bit = 1 - bit;
-      keep = bit ? p1 : 1 - p1;
-    }
-    var scale = 1 / Math.sqrt(keep);
-    for (var i = 0; i < this.size; i++) {
-      if (((i & b) ? 1 : 0) === bit) { this.re[i] *= scale; this.im[i] *= scale; }
-      else { this.re[i] = 0; this.im[i] = 0; }
-    }
-    return bit;
-  };
-
-  /** Total probability — should always be 1. Used by the self-checks. */
-  QState.prototype.norm = function () {
-    var s = 0, i;
-    for (i = 0; i < this.size; i++) s += this.re[i] * this.re[i] + this.im[i] * this.im[i];
-    return s;
-  };
-
-  /** Collapse the whole board once. Returns an array of n bits. */
-  QState.prototype.measure = function (rng) {
-    var r = rng(), acc = 0, i, k, bits = [];
-    var chosen = this.size - 1;
-    for (i = 0; i < this.size; i++) {
-      acc += this.re[i] * this.re[i] + this.im[i] * this.im[i];
-      if (r <= acc) { chosen = i; break; }
-    }
-    for (k = 0; k < this.n; k++) bits.push((chosen >> k) & 1);
-    return bits;
-  };
 
   /* ------------------------------------------------------------------ *
    * Reading a coin
    * ------------------------------------------------------------------ */
 
-  var LOOSE = 1e-6;
+  const KETS = { one: '|1⟩', zero: '|0⟩', plus: '|+⟩', minus: '|−⟩', mixed: 'ρ' };
 
   /**
-   * What a single coin looks like on the table.
-   *   up    — resting, jack-o'-lantern face showing  (|1>)
-   *   down  — resting, skull showing                 (|0>)
-   *   cw    — spinning clockwise                     (|+>)
-   *   ccw   — spinning counter-clockwise             (|->)
-   *   murky — chained to another coin, or otherwise undecided
+   * What a single coin looks like on the table:
+   *   one    settled, showing 1          |1⟩
+   *   zero   settled, showing 0          |0⟩
+   *   plus   spinning, + tilt            |+⟩
+   *   minus  spinning, − tilt            |−⟩
+   *   mixed  linked to another coin (or otherwise undecided)
    */
   function readCoin(st, q) {
-    var up = st.probOne(q);
-    var minus = st.probMinus(q);
-    var kind = 'murky';
-    if (up > 1 - LOOSE) kind = 'up';
-    else if (up < LOOSE) kind = 'down';
+    const up = st.probOne(q);
+    const minus = st.probMinus(q);
+    let kind = 'mixed';
+    if (up > 1 - LOOSE) kind = 'one';
+    else if (up < LOOSE) kind = 'zero';
     else if (Math.abs(up - 0.5) < LOOSE) {
-      if (minus < LOOSE) kind = 'cw';
-      else if (minus > 1 - LOOSE) kind = 'ccw';
+      if (minus < LOOSE) kind = 'plus';
+      else if (minus > 1 - LOOSE) kind = 'minus';
     }
-    return { kind: kind, up: up, minus: minus, ket: KETS[kind] || null };
+    return { kind, up, minus, ket: KETS[kind] };
   }
 
-  var KETS = { up: '|1⟩', down: '|0⟩', cw: '|+⟩', ccw: '|−⟩' };
-
-  /**
-   * Every pair of coins that is perfectly chained.
-   * `same` is true when the two always land the same way up.
-   */
-  function findChains(st) {
-    var out = [], used = {}, i, j, p, best, k;
-    for (i = 0; i < st.n - 1; i++) {
+  /** Every pair of coins that is perfectly linked. `same` → land alike. */
+  function findLinks(st) {
+    const out = [], used = {};
+    for (let i = 0; i < st.n - 1; i++) {
       if (used[i]) continue;
-      for (j = i + 1; j < st.n; j++) {
+      for (let j = i + 1; j < st.n; j++) {
         if (used[j]) continue;
-        p = st.bellProbs(i, j);
-        best = 0;
-        for (k = 1; k < 4; k++) if (p[k] > p[best]) best = k;
+        const p = st.bellProbs(i, j);
+        let best = 0;
+        for (let k = 1; k < 4; k++) if (p[k] > p[best]) best = k;
         if (p[best] > 1 - LOOSE) {
           out.push({ a: i, b: j, same: best < 2, bell: best });
           used[i] = used[j] = true;
@@ -230,10 +222,11 @@
     return out;
   }
 
-  /** Expected number of face-up coins — the honest value of a board. */
+  /** Expected number of coins landing 1 among the first `upTo`. */
   function expectedScore(st, upTo) {
-    var n = upTo === undefined ? st.n : upTo, s = 0, q;
-    for (q = 0; q < n; q++) s += st.probOne(q);
+    const n = upTo === undefined ? st.n : upTo;
+    let s = 0;
+    for (let q = 0; q < n; q++) s += st.probOne(q);
     return s;
   }
 
@@ -242,104 +235,95 @@
    * ------------------------------------------------------------------ */
 
   /**
-   * Build a starting board: a few coins chained into pairs, the rest in one
-   * of the four plain states. Chains are always disjoint pairs, never
-   * three-way tangles, so every chain can be drawn as one visible link and
-   * broken with a single Bind.
+   * A fresh board: maybe a linked pair, the rest in one of the four plain
+   * states. Links are disjoint pairs so each can be drawn as one arc and
+   * broken with one Link card. Boards that are already won or hopeless are
+   * redealt.
    */
-  function dealBoard(rng, n) {
-    n = n || 5;
-    var best = null, attempt;
-    for (attempt = 0; attempt < 200; attempt++) {
-      var st = new QState(n);
-      var order = shuffle(range(n), rng);
-      var pos = 0;
-      var nPairs = pickWeighted([0, 1, 2], [0.25, 0.5, 0.25], rng);
-      var p;
-      for (p = 0; p < nPairs && pos + 1 < n; p++) {
-        var c = order[pos++], t = order[pos++];
-        st.h(c);                       // control into a spin
-        if (rng() < 0.5) st.z(c);      // clockwise or counter-clockwise
-        if (rng() < 0.5) st.x(t);      // chained the same way, or opposite
+  const PLAIN_WEIGHTS = [0.38, 0.12, 0.32, 0.18];
+
+  function dealBoard(rng, n = 5) {
+    let fallback = null;
+    for (let attempt = 0; attempt < 200; attempt++) {
+      const st = new QState(n);
+      const order = shuffle(range(n), rng);
+      let pos = 0;
+      const nPairs = pickWeighted([0, 1, 2], [0.45, 0.45, 0.10], rng);
+      for (let p = 0; p < nPairs && pos + 1 < n; p++) {
+        const c = order[pos++], t = order[pos++];
+        st.h(c);
+        if (rng() < 0.5) st.z(c);
+        if (rng() < 0.5) st.x(t);
         st.cx(c, t);
       }
       for (; pos < n; pos++) {
-        var q = order[pos];
-        var pickState = Math.floor(rng() * 4);
-        if (pickState === 1) st.x(q);
-        else if (pickState === 2) st.h(q);
-        else if (pickState === 3) { st.h(q); st.z(q); }
+        const q = order[pos];
+        const pick = pickWeighted(['zero', 'one', 'plus', 'minus'], PLAIN_WEIGHTS, rng);
+        if (pick === 'one') st.x(q);
+        else if (pick === 'plus') st.h(q);
+        else if (pick === 'minus') { st.h(q); st.z(q); }
       }
       if (isPlayable(st)) return st;
-      if (!best) best = st;
+      if (!fallback) fallback = st;
     }
-    return best;
+    return fallback;
   }
 
-  /**
-   * A board is worth playing if it is neither already won nor hopeless:
-   * at most two coins handed to you face-up, and at least two coins that a
-   * card can actually change.
-   */
+  /** At most one coin handed out as a 1, and at least two a card can change. */
   function isPlayable(st) {
-    var free = 0, given = 0, q, c;
-    for (q = 0; q < st.n; q++) {
-      c = readCoin(st, q);
-      if (c.kind === 'up') given++;
-      if (c.kind !== 'up' && c.kind !== 'down') free++;
+    let given = 0, free = 0;
+    for (let q = 0; q < st.n; q++) {
+      const k = readCoin(st, q).kind;
+      if (k === 'one') given++;
+      if (k !== 'one' && k !== 'zero') free++;
     }
-    return given <= 2 && free >= 2;
+    return given <= 1 && free >= 2;
   }
 
   /* ------------------------------------------------------------------ *
-   * Small helpers
+   * Randomness
    * ------------------------------------------------------------------ */
 
-  /** Deterministic PRNG so a seed always replays the same game. */
+  /** Deterministic PRNG so a seed always deals the same game. */
   function mulberry32(seed) {
-    var a = seed >>> 0;
+    let a = seed >>> 0;
     return function () {
       a = (a + 0x6D2B79F5) >>> 0;
-      var t = a;
+      let t = a;
       t = Math.imul(t ^ (t >>> 15), 1 | t);
       t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
       return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
     };
   }
 
-  function range(n) {
-    var a = [], i;
-    for (i = 0; i < n; i++) a.push(i);
-    return a;
+  /** Mix two integers into one seed (for per-hand deal streams). */
+  function mix(a, b) {
+    let h = (a ^ 0x9E3779B9) >>> 0;
+    h = Math.imul(h ^ (h >>> 16), 0x85EBCA6B) >>> 0;
+    h = (h ^ b) >>> 0;
+    h = Math.imul(h ^ (h >>> 13), 0xC2B2AE35) >>> 0;
+    return (h ^ (h >>> 16)) >>> 0;
   }
 
+  function range(n) { return Array.from({ length: n }, (_, i) => i); }
+
   function shuffle(arr, rng) {
-    var i, j, t;
-    for (i = arr.length - 1; i > 0; i--) {
-      j = Math.floor(rng() * (i + 1));
-      t = arr[i]; arr[i] = arr[j]; arr[j] = t;
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1));
+      const t = arr[i]; arr[i] = arr[j]; arr[j] = t;
     }
     return arr;
   }
 
   function pickWeighted(values, weights, rng) {
-    var r = rng(), acc = 0, i;
-    for (i = 0; i < values.length; i++) {
+    const r = rng();
+    let acc = 0;
+    for (let i = 0; i < values.length; i++) {
       acc += weights[i];
       if (r <= acc) return values[i];
     }
     return values[values.length - 1];
   }
 
-  global.Q = {
-    QState: QState,
-    readCoin: readCoin,
-    findChains: findChains,
-    expectedScore: expectedScore,
-    dealBoard: dealBoard,
-    mulberry32: mulberry32,
-    shuffle: shuffle,
-    range: range,
-    EPS: EPS
-  };
-})(window);
+  root.Q = { QState, readCoin, findLinks, expectedScore, dealBoard, mulberry32, mix, range, shuffle, KETS };
+})(typeof window !== 'undefined' ? window : globalThis);
